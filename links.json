@@ -1,0 +1,35 @@
+{
+  "_nota": "Edita esta lista con cualquier editor de texto. Cada enlace necesita name y url (http o https). El campo description es opcional. Los cambios se aplican al volver a la pestaña Descubrir.",
+  "links": [
+    {
+      "id": "rtve-play",
+      "name": "RTVE Play",
+      "url": "https://www.rtve.es/play/",
+      "description": "Televisión pública española: programas, series, documentales y cine en abierto."
+    },
+    {
+      "id": "tubi",
+      "name": "Tubi",
+      "url": "https://tubitv.com/",
+      "description": "Películas y series gratuitas con anuncios, disponibles en varios países."
+    },
+    {
+      "id": "pluto-tv",
+      "name": "Pluto TV",
+      "url": "https://pluto.tv/es/",
+      "description": "Canales en directo y catálogo a la carta, sin registro y con anuncios."
+    },
+    {
+      "id": "youtube-movies",
+      "name": "YouTube Movies",
+      "url": "https://www.youtube.com/feed/storefront",
+      "description": "Películas gratuitas con anuncios y títulos disponibles para alquiler o compra."
+    },
+    {
+      "id": "internet-archive",
+      "name": "Internet Archive",
+      "url": "https://archive.org/details/movies",
+      "description": "Archivo digital sin ánimo de lucro con cine clásico, documentales y material de dominio público."
+    }
+  ]
+}

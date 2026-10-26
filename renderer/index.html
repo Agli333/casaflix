@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';"
+    />
+    <meta name="color-scheme" content="dark" />
+    <title>CasaFlix</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23101722'/%3E%3Cpath d='M12 30 32 13l20 17' fill='none' stroke='%23ff8a65' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M18 28v22h28V28' fill='none' stroke='%23f4ede4' stroke-width='5' stroke-linejoin='round'/%3E%3Cpath d='m28 35 9 5.5-9 5.5z' fill='%23ff8a65'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand" aria-label="CasaFlix">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" role="presentation">
+              <path
+                d="M5 15.5 16 6l11 9.5"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.4"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <path
+                d="M8.5 14v12h15V14"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.4"
+                stroke-linejoin="round"
+              />
+              <path d="m14 18 5 3-5 3z" fill="currentColor" />
+            </svg>
+          </span>
+          <span class="brand-name">Casa<strong>Flix</strong></span>
+        </div>
+
+        <nav class="tabs" aria-label="Secciones">
+          <button
+            type="button"
+            class="tab is-active"
+            data-view="library"
+            aria-current="page"
+          >
+            Biblioteca
+          </button>
+          <button type="button" class="tab" data-view="discover">
+            Descubrir
+          </button>
+        </nav>
+
+        <div class="search-wrap" role="search">
+          <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <circle
+              cx="10.5"
+              cy="10.5"
+              r="6.5"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+            />
+            <path
+              d="m15.5 15.5 4 4"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+            />
+          </svg>
+          <input
+            id="searchInput"
+            class="search-input"
+            type="search"
+            placeholder="Buscar por título…"
+            autocomplete="off"
+            spellcheck="false"
+            aria-label="Buscar vídeos por título"
+          />
+          <kbd class="search-kbd" aria-hidden="true">/</kbd>
+        </div>
+
+        <div class="topbar-actions">
+          <button
+            type="button"
+            id="refreshBtn"
+            class="icon-button"
+            title="Volver a escanear la carpeta"
+            aria-label="Volver a escanear la carpeta"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M19.5 8.5A8 8 0 1 0 20 14"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+              />
+              <path
+                d="M20 4.5V9h-4.5"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+          <button type="button" id="folderBtn" class="folder-button">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M3.5 7.5A1.5 1.5 0 0 1 5 6h4l2 2h8a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5z"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span>Carpeta</span>
+          </button>
+        </div>
+      </header>
+
+      <main class="main" id="main">
+        <section id="libraryView" class="view" aria-labelledby="libraryTitle">
+          <div class="page-intro" id="libraryIntro">
+            <p class="eyebrow">Tu biblioteca local</p>
+            <h1 id="libraryTitle">Todo tu cine, <span>en casa</span></h1>
+            <p class="page-summary" id="librarySummary">
+              Elige una carpeta para empezar a organizar tus vídeos.
+            </p>
+          </div>
+
+          <div id="rows" class="rows"></div>
+
+          <div id="loadingState" class="loading-state" hidden>
+            <span class="spinner" aria-hidden="true"></span>
+            <p>Preparando tu biblioteca…</p>
+          </div>
+
+          <div id="emptyState" class="empty-state" hidden>
+            <div class="empty-icon" aria-hidden="true">
+              <svg viewBox="0 0 64 64">
+                <rect
+                  x="8"
+                  y="14"
+                  width="48"
+                  height="36"
+                  rx="5"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.4"
+                />
+                <path
+                  d="M26 25.5v13l11-6.5z"
+                  fill="currentColor"
+                  opacity="0.85"
+                />
+                <path
+                  d="M8 23h48"
+                  stroke="currentColor"
+                  stroke-width="2.4"
+                />
+              </svg>
+            </div>
+            <h2 id="emptyTitle">Tu cine, a un clic</h2>
+            <p id="emptyText">
+              Elige la carpeta donde guardas tus vídeos. Cada subcarpeta se
+              convertirá en una fila y los vídeos sueltos aparecerán en
+              «Sin categoría».
+            </p>
+            <div class="empty-actions">
+              <button type="button" id="emptyChooseBtn" class="button button-primary">
+                Elegir carpeta de vídeos
+              </button>
+              <button
+                type="button"
+                id="emptyRefreshBtn"
+                class="button button-ghost"
+                hidden
+              >
+                Volver a intentar
+              </button>
+            </div>
+            <p class="hint">
+              Formatos admitidos: MP4, WebM y M4V. Las carátulas
+              <code>poster.jpg</code> o <code>folder.jpg</code> son opcionales.
+            </p>
+          </div>
+        </section>
+
+        <section
+          id="discoverView"
+          class="view"
+          aria-labelledby="discoverTitle"
+          hidden
+        >
+          <div class="page-intro">
+            <p class="eyebrow">Explorar</p>
+            <h1 id="discoverTitle">Descubrir <span>sin salir de casa</span></h1>
+            <p class="page-summary">
+              Una selección de servicios gratuitos y legales. Los enlaces se
+              abren en tu navegador, nunca dentro de CasaFlix.
+            </p>
+          </div>
+
+          <div id="offlineNotice" class="notice" role="status" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M4 4 20 20M8.5 15.5a5 5 0 0 1 7 0M5.5 12a10 10 0 0 1 4-2.4M18.5 12a10 10 0 0 0-6.2-2.9M12 19h.01"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+              />
+            </svg>
+            <p>
+              <strong>Sin conexión a internet.</strong> Los enlaces de esta
+              pestaña no están disponibles, pero tu biblioteca local sigue
+              funcionando con normalidad.
+            </p>
+          </div>
+
+          <div id="discoverGrid" class="discover-grid"></div>
+
+          <p id="linksHint" class="discover-footnote">
+            ¿Quieres cambiar esta selección? Edita el archivo
+            <code>links.json</code> y vuelve a esta pestaña. CasaFlix no aloja
+            ni reproduce contenido de terceros.
+          </p>
+        </section>
+      </main>
+
+      <footer class="statusbar">
+        <span id="statusCount" class="status-count">Iniciando…</span>
+        <span class="status-sep" aria-hidden="true">·</span>
+        <span id="statusFolder" class="status-folder"></span>
+        <span class="status-network">
+          <span id="netDot" class="status-dot" aria-hidden="true"></span>
+          <span id="netLabel">Comprobando conexión…</span>
+        </span>
+      </footer>
+    </div>
+
+    <section
+      id="playerView"
+      class="player-view"
+      aria-label="Reproductor de vídeo"
+      hidden
+    >
+      <header class="player-bar">
+        <button type="button" id="playerBack" class="player-back">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M15 5 8 12l7 7"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          <span>Volver</span>
+        </button>
+        <div class="player-heading">
+          <h2 id="playerTitle"></h2>
+          <p id="playerSubtitle"></p>
+        </div>
+        <span class="player-badge">Local</span>
+      </header>
+      <div class="player-stage">
+        <video id="playerVideo" controls playsinline preload="metadata"></video>
+        <div id="playerNotice" class="player-notice" hidden></div>
+      </div>
+    </section>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

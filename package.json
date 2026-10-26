@@ -13,6 +13,9 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
+    "test:media": "electron scripts/make-test-media.js",
+    "test:e2e": "node scripts/e2e-check.mjs",
+    "icon": "electron scripts/make-icon.js",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
     "dist:dir": "electron-builder --dir"
@@ -24,17 +27,20 @@
   "build": {
     "appId": "com.casaflix.app",
     "productName": "CasaFlix",
+    "icon": "build/icon.png",
     "files": [
       "main.js",
       "preload.js",
       "renderer/**/*",
       "links.json",
+      "build/icon.png",
       "package.json"
     ],
     "directories": {
       "output": "release"
     },
     "win": {
+      "icon": "build/icon.png",
       "target": [
         "nsis",
         "portable"

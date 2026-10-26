@@ -117,6 +117,20 @@ mi-netflix/
 └── README.md
 ```
 
+## Verificación durante el desarrollo
+
+El repositorio incluye una prueba de extremo a extremo que abre la aplicación real, comprueba el escaneo, las carátulas, las miniaturas, el buscador, el reproductor, «Continuar viendo» y la pestaña Descubrir, y guarda capturas en `.test-artifacts/`.
+
+```bash
+# 1. Genera vídeos de prueba originales con MediaRecorder
+npm run test:media
+
+# 2. Ejecuta la verificación (Electron + CDP, sin dependencias extra)
+npm run test:e2e
+```
+
+Los vídeos y las capturas de prueba están ignorados por git.
+
 ## Seguridad y privacidad
 
 - `contextIsolation` activado, `nodeIntegration` desactivado y `sandbox` activado.

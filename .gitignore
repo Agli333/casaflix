@@ -1,0 +1,19 @@
+node_modules/
+release/
+dist/
+out/
+*.log
+npm-debug.log*
+npm-install*.log
+
+# Datos locales de pruebas y artefactos de verificación
+.test-media/
+.test-userdata/
+.test-artifacts/
+
+# Sistema operativo / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

@@ -1,0 +1,48 @@
+{
+  "name": "casaflix",
+  "productName": "CasaFlix",
+  "version": "1.0.0",
+  "description": "Biblioteca de vídeo local con una interfaz sencilla tipo plataforma de streaming.",
+  "main": "main.js",
+  "private": true,
+  "license": "MIT",
+  "author": "CasaFlix",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:dir": "electron-builder --dir"
+  },
+  "devDependencies": {
+    "electron": "^40.10.6",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "com.casaflix.app",
+    "productName": "CasaFlix",
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "links.json",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

@@ -154,6 +154,7 @@ mi-netflix/
 │   ├── styles.css
 │   └── app.js
 ├── links.json          # Enlaces editables de Descubrir
+├── LICENSE             # Licencia MIT
 ├── package.json
 └── README.md
 ```
@@ -185,3 +186,7 @@ Los vídeos y las capturas de prueba están ignorados por git.
 - La reproducción depende de los códecs que incluya Electron/Chromium. Los MP4 con H.264 y AAC son la opción más compatible; algunos códecs o archivos dañados pueden no reproducirse.
 - La detección de conexión usa el estado de red del sistema. En redes cautivas puede indicar «en línea» aunque el acceso a internet sea limitado.
 - CasaFlix es un proyecto original y no está afiliado a ninguno de los servicios enlazados en **Descubrir**. Las marcas y los contenidos de terceros pertenecen a sus respectivos titulares.
+
+## Licencia
+
+Este proyecto se distribuye bajo la licencia MIT. Copyright © 2026 **Agli333**. Consulta el archivo [`LICENSE`](./LICENSE).

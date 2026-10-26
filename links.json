@@ -20,10 +20,10 @@
       "description": "Canales en directo y catálogo a la carta, sin registro y con anuncios."
     },
     {
-      "id": "youtube-movies",
-      "name": "YouTube Movies",
-      "url": "https://www.youtube.com/feed/storefront",
-      "description": "Películas gratuitas con anuncios y títulos disponibles para alquiler o compra."
+      "id": "plex",
+      "name": "Plex",
+      "url": "https://watch.plex.tv/",
+      "description": "Películas y series gratuitas con anuncios, sin necesidad de suscripción."
     },
     {
       "id": "internet-archive",

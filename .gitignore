@@ -10,6 +10,14 @@ npm-install*.log
 .test-media/
 .test-userdata/
 .test-artifacts/
+.datos/
+
+# Vídeos locales: no se suben al repositorio
+*.mp4
+*.webm
+*.m4v
+*.mkv
+*.avi
 
 # Sistema operativo / editor
 .DS_Store

@@ -235,7 +235,6 @@ async function scanLibrary(root) {
   const errors = [];
   const nextVideoIndex = new Map();
   const nextPosterIndex = new Map();
-  const seenCategories = new Set();
 
   async function walk(directory, category, depth) {
     let entries;
@@ -272,7 +271,6 @@ async function scanLibrary(root) {
       if (entry.isDirectory()) {
         if (SKIP_DIRECTORIES.has(entry.name.toLowerCase())) continue;
         const nextCategory = depth === 0 ? entry.name : category;
-        if (depth === 0) seenCategories.add(entry.name);
         await walk(fullPath, nextCategory, depth + 1);
         continue;
       }
@@ -499,6 +497,10 @@ function registerAppProtocol() {
       if (pathname === '/' || pathname === '/index.html') {
         return serveFile(path.join(RENDERER_DIR, 'index.html'), request, {
           cacheControl: 'no-store',
+          extraHeaders: {
+            'Content-Security-Policy': "frame-ancestors 'none'",
+            'X-Frame-Options': 'DENY',
+          },
         });
       }
 
@@ -557,7 +559,11 @@ function notFound() {
   });
 }
 
-async function serveFile(filePath, request, { cacheControl = 'no-store' } = {}) {
+async function serveFile(
+  filePath,
+  request,
+  { cacheControl = 'no-store', extraHeaders = {} } = {},
+) {
   let stats;
   try {
     stats = await fsp.stat(filePath);
@@ -574,6 +580,7 @@ async function serveFile(filePath, request, { cacheControl = 'no-store' } = {}) 
     'Accept-Ranges': 'bytes',
     'Cache-Control': cacheControl,
     'X-Content-Type-Options': 'nosniff',
+    ...extraHeaders,
   };
 
   const rangeHeader = request.headers.get('range');
@@ -653,6 +660,7 @@ function createWindow() {
     minHeight: 600,
     backgroundColor: '#080b11',
     title: 'CasaFlix',
+    icon: path.join(__dirname, 'build', 'icon.png'),
     show: false,
     autoHideMenuBar: true,
     webPreferences: {
@@ -675,10 +683,15 @@ function createWindow() {
   mainWindow.webContents.on('will-navigate', (event) => {
     event.preventDefault();
   });
+  // Solo se permite pantalla completa (botón de los controles nativos del
+  // vídeo). Cámara, micrófono, portapapeles, notificaciones, etc. quedan
+  // denegados.
   mainWindow.webContents.session.setPermissionRequestHandler(
-    (_webContents, _permission, callback) => callback(false),
+    (_webContents, permission, callback) => callback(permission === 'fullscreen'),
   );
-  mainWindow.webContents.session.setPermissionCheckHandler(() => false);
+  mainWindow.webContents.session.setPermissionCheckHandler(
+    (_webContents, permission) => permission === 'fullscreen',
+  );
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -712,6 +725,10 @@ function registerIpc() {
     if (result.canceled || !result.filePaths[0]) {
       return { canceled: true };
     }
+
+    // Si había un escaneo en curso, termina antes de cambiar la raíz para que
+    // la biblioteca devuelta pertenezca siempre a la carpeta recién elegida.
+    if (scanPromise) await scanPromise.catch(() => {});
 
     state.config.videoRoot = path.resolve(result.filePaths[0]);
     await saveConfig();

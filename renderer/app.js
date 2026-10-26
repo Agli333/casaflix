@@ -47,6 +47,7 @@ const appState = {
   query: '',
   currentItem: null,
   playing: false,
+  playbackEnded: false,
   lastSavedAt: 0,
 };
 
@@ -156,6 +157,9 @@ function bindEvents() {
 
   els.playerBack.addEventListener('click', closePlayer);
   els.playerVideo.addEventListener('timeupdate', () => saveCurrentProgress(false));
+  els.playerVideo.addEventListener('play', () => {
+    appState.playbackEnded = false;
+  });
   els.playerVideo.addEventListener('pause', () => saveCurrentProgress(true));
   els.playerVideo.addEventListener('error', () => {
     if (appState.playing) {
@@ -503,11 +507,7 @@ function createCard(item, options = {}) {
   img.loading = 'lazy';
   img.dataset.itemId = item.id;
 
-  let usingPoster = false;
-  let usingThumb = false;
-
   if (item.posterUrl) {
-    usingPoster = true;
     img.dataset.source = 'poster';
     img.src = item.posterUrl;
     img.hidden = false;
@@ -521,7 +521,6 @@ function createCard(item, options = {}) {
       requestThumb({ card, item, img, placeholder });
     });
   } else if (item.thumbUrl) {
-    usingThumb = true;
     img.dataset.source = 'thumb';
     img.dataset.thumbState = 'done';
     img.src = item.thumbUrl;
@@ -605,12 +604,6 @@ function createCard(item, options = {}) {
   card.append(media, body);
 
   card.addEventListener('click', () => openPlayer(item));
-
-  // Evita que el cargador nativo de imágenes y el observador de miniaturas
-  // se activen con imágenes que ya tienen origen definitivo.
-  if (usingPoster || usingThumb) {
-    img.dataset.resolved = '1';
-  }
 
   return card;
 }
@@ -910,6 +903,7 @@ function openPlayer(item) {
 
   appState.currentItem = item;
   appState.playing = true;
+  appState.playbackEnded = false;
   appState.lastSavedAt = 0;
 
   els.playerTitle.textContent = item.title;
@@ -923,9 +917,6 @@ function openPlayer(item) {
   document.body.classList.add('is-playing');
 
   const video = els.playerVideo;
-  video.src = item.mediaUrl;
-  video.load();
-
   const saved = appState.progress[item.id];
   const canResume =
     saved &&
@@ -951,12 +942,15 @@ function openPlayer(item) {
     });
   };
 
+  video.src = item.mediaUrl;
+  video.load();
   video.focus();
 }
 
 function handlePlaybackEnded() {
   const item = appState.currentItem;
   if (!item) return;
+  appState.playbackEnded = true;
   delete appState.progress[item.id];
   if (api) api.clearProgress(item.id).catch(() => {});
   showPlayerNotice('Fin del vídeo. La próxima vez empezará desde el principio.', 7000);
@@ -964,7 +958,7 @@ function handlePlaybackEnded() {
 
 function saveCurrentProgress(force) {
   const item = appState.currentItem;
-  if (!appState.playing || !item) return;
+  if (!appState.playing || !item || appState.playbackEnded) return;
 
   const video = els.playerVideo;
   const position = video.currentTime;
@@ -997,13 +991,10 @@ function closePlayer() {
   const item = appState.currentItem;
   const video = els.playerVideo;
   appState.playing = false;
+  appState.playbackEnded = false;
   appState.currentItem = null;
 
   video.onloadedmetadata = null;
-  video.ontimeupdate = null;
-  video.onpause = null;
-  video.onended = null;
-  video.onerror = null;
   video.pause();
   video.removeAttribute('src');
   video.load();

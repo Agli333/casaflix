@@ -46,10 +46,13 @@
           <button
             type="button"
             class="tab is-active"
-            data-view="library"
+            data-view="movies"
             aria-current="page"
           >
-            Biblioteca
+            Películas
+          </button>
+          <button type="button" class="tab" data-view="series">
+            Series
           </button>
           <button type="button" class="tab" data-view="discover">
             Descubrir
@@ -129,11 +132,46 @@
       <main class="main" id="main">
         <section id="libraryView" class="view" aria-labelledby="libraryTitle">
           <div class="page-intro" id="libraryIntro">
-            <p class="eyebrow">Tu biblioteca local</p>
-            <h1 id="libraryTitle">Todo tu cine, <span>en casa</span></h1>
+            <p class="eyebrow" id="libraryEyebrow">Películas</p>
+            <h1 id="libraryTitle">Tu cine, <span>en casa</span></h1>
             <p class="page-summary" id="librarySummary">
               Elige una carpeta para empezar a organizar tus vídeos.
             </p>
+          </div>
+
+          <div id="structureNotice" class="notice notice-info" role="status" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M3.5 7.5A1.5 1.5 0 0 1 5 6h4l2 2h8a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5z"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linejoin="round"
+              />
+              <path
+                d="M12 10.5v5M9.5 13h5"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+              />
+            </svg>
+            <p id="structureNoticeText"></p>
+            <button
+              type="button"
+              id="structureNoticeClose"
+              class="notice-close"
+              aria-label="Cerrar aviso"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M6 6l12 12M18 6 6 18"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.9"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
           </div>
 
           <div id="rows" class="rows"></div>
@@ -170,9 +208,8 @@
             </div>
             <h2 id="emptyTitle">Tu cine, a un clic</h2>
             <p id="emptyText">
-              Elige la carpeta donde guardas tus vídeos. Cada subcarpeta se
-              convertirá en una fila y los vídeos sueltos aparecerán en
-              «Sin categoría».
+              Elige la carpeta donde guardas tus vídeos. Dentro encontrarás
+              <code>Peliculas</code> y <code>Series</code>.
             </p>
             <div class="empty-actions">
               <button type="button" id="emptyChooseBtn" class="button button-primary">
@@ -187,11 +224,43 @@
                 Volver a intentar
               </button>
             </div>
-            <p class="hint">
+            <p class="hint" id="emptyHint">
               Formatos admitidos: MP4, WebM y M4V. Las carátulas
               <code>poster.jpg</code> o <code>folder.jpg</code> son opcionales.
             </p>
           </div>
+        </section>
+
+        <section
+          id="seriesDetailView"
+          class="view"
+          aria-labelledby="seriesDetailTitle"
+          hidden
+        >
+          <button type="button" id="seriesDetailBack" class="detail-back">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M15 5 8 12l7 7"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span>Volver a Series</span>
+          </button>
+
+          <div class="series-hero">
+            <div id="seriesDetailPoster" class="series-poster"></div>
+            <div class="series-hero-body">
+              <p class="eyebrow">Serie</p>
+              <h1 id="seriesDetailTitle"></h1>
+              <p class="page-summary" id="seriesDetailMeta"></p>
+            </div>
+          </div>
+
+          <div id="detailSeasons" class="seasons"></div>
         </section>
 
         <section
@@ -271,6 +340,19 @@
           <h2 id="playerTitle"></h2>
           <p id="playerSubtitle"></p>
         </div>
+        <button type="button" id="playerNext" class="player-next" hidden>
+          <span>Siguiente episodio</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="m9.5 5 7 7-7 7"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
         <span class="player-badge">Local</span>
       </header>
       <div class="player-stage">

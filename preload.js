@@ -13,6 +13,8 @@ const api = Object.freeze({
   saveProgress: (id, position, duration) =>
     ipcRenderer.invoke('progress:save', { id, position, duration }),
   clearProgress: (id) => ipcRenderer.invoke('progress:clear', id),
+  saveDuration: (id, duration) =>
+    ipcRenderer.invoke('media:duration', { id, duration }),
   getLinks: () => ipcRenderer.invoke('links:get'),
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
   networkStatus: () => ipcRenderer.invoke('net:status'),

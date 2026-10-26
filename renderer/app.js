@@ -9,15 +9,26 @@ const els = {
   folderBtn: document.getElementById('folderBtn'),
   libraryView: document.getElementById('libraryView'),
   discoverView: document.getElementById('discoverView'),
-  libraryIntro: document.getElementById('libraryIntro'),
+  seriesDetailView: document.getElementById('seriesDetailView'),
+  libraryEyebrow: document.getElementById('libraryEyebrow'),
+  libraryTitle: document.getElementById('libraryTitle'),
   librarySummary: document.getElementById('librarySummary'),
+  structureNotice: document.getElementById('structureNotice'),
+  structureNoticeText: document.getElementById('structureNoticeText'),
+  structureNoticeClose: document.getElementById('structureNoticeClose'),
   rows: document.getElementById('rows'),
   loadingState: document.getElementById('loadingState'),
   emptyState: document.getElementById('emptyState'),
   emptyTitle: document.getElementById('emptyTitle'),
   emptyText: document.getElementById('emptyText'),
+  emptyHint: document.getElementById('emptyHint'),
   emptyChooseBtn: document.getElementById('emptyChooseBtn'),
   emptyRefreshBtn: document.getElementById('emptyRefreshBtn'),
+  seriesDetailBack: document.getElementById('seriesDetailBack'),
+  seriesDetailPoster: document.getElementById('seriesDetailPoster'),
+  seriesDetailTitle: document.getElementById('seriesDetailTitle'),
+  seriesDetailMeta: document.getElementById('seriesDetailMeta'),
+  detailSeasons: document.getElementById('detailSeasons'),
   discoverGrid: document.getElementById('discoverGrid'),
   offlineNotice: document.getElementById('offlineNotice'),
   linksHint: document.getElementById('linksHint'),
@@ -29,6 +40,7 @@ const els = {
   playerBack: document.getElementById('playerBack'),
   playerTitle: document.getElementById('playerTitle'),
   playerSubtitle: document.getElementById('playerSubtitle'),
+  playerNext: document.getElementById('playerNext'),
   playerVideo: document.getElementById('playerVideo'),
   playerNotice: document.getElementById('playerNotice'),
   toast: document.getElementById('toast'),
@@ -40,15 +52,20 @@ const appState = {
   config: { videoRoot: null, folderName: null },
   library: null,
   progress: {},
+  durations: {},
   links: [],
   linksError: null,
   online: true,
-  view: 'library',
+  view: 'movies',
+  detailSeriesId: null,
   query: '',
+  structureNoticeDismissed: false,
   currentItem: null,
   playing: false,
   playbackEnded: false,
   lastSavedAt: 0,
+  playQueue: [],
+  playIndex: -1,
 };
 
 let toastTimer = null;
@@ -57,10 +74,10 @@ let searchTimer = null;
 let networkTimer = null;
 
 // ---------------------------------------------------------------------------
-// Miniaturas: cola con IntersectionObserver
+// Miniaturas: cola compartida con IntersectionObserver
 // ---------------------------------------------------------------------------
 
-const THUMB_CONCURRENCY = 2;
+const MEDIA_CONCURRENCY = 2;
 
 const thumbQueue = {
   items: [],
@@ -68,27 +85,75 @@ const thumbQueue = {
   queuedIds: new Set(),
   inFlight: new Map(),
   failed: new Set(),
-  pendingCards: new WeakMap(),
+  callbacks: new Map(),
 };
+
+const durationQueue = {
+  items: [],
+  active: 0,
+  queuedIds: new Set(),
+  inFlight: new Map(),
+  failed: new Set(),
+  callbacks: new Map(),
+};
+
+let thumbObserverJobs = new WeakMap();
+let durationObserverJobs = new WeakMap();
 
 const thumbObserver = new IntersectionObserver(
   (entries) => {
     for (const entry of entries) {
       if (!entry.isIntersecting) continue;
-      const record = thumbQueue.pendingCards.get(entry.target);
+      const job = thumbObserverJobs.get(entry.target);
       thumbObserver.unobserve(entry.target);
-      if (!record) continue;
-      thumbQueue.pendingCards.delete(entry.target);
-      if (!record.img.isConnected) continue;
-      if (record.item.thumbUrl) {
-        setCardThumb(record.item, record);
-      } else {
-        enqueueThumbnail(record.item);
-      }
+      if (!job || !job.img.isConnected) continue;
+      job.start();
     }
   },
   { root: null, rootMargin: '250px 320px', threshold: 0.01 },
 );
+
+const durationObserver = new IntersectionObserver(
+  (entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const job = durationObserverJobs.get(entry.target);
+      durationObserver.unobserve(entry.target);
+      if (!job || !job.element.isConnected) continue;
+      job.start();
+    }
+  },
+  { root: null, rootMargin: '180px', threshold: 0.01 },
+);
+
+function resetObservers() {
+  thumbObserver.disconnect();
+  durationObserver.disconnect();
+  thumbObserverJobs = new WeakMap();
+  durationObserverJobs = new WeakMap();
+}
+
+function observeThumb(element, job) {
+  thumbObserverJobs.set(element, job);
+  thumbObserver.observe(element);
+}
+
+function observeDuration(element, item) {
+  if (!item || !item.id || itemDuration(item.id)) return;
+  durationObserverJobs.set(element, {
+    element,
+    start: () => requestDuration(item),
+  });
+  durationObserver.observe(element);
+}
+
+function resetMediaQueues() {
+  // Conserva las tareas en curso, pero descarta las que aún no han empezado.
+  thumbQueue.items.length = 0;
+  thumbQueue.queuedIds.clear();
+  durationQueue.items.length = 0;
+  durationQueue.queuedIds.clear();
+}
 
 // ---------------------------------------------------------------------------
 // Arranque
@@ -140,11 +205,18 @@ function bindEvents() {
 
   els.searchInput.addEventListener('input', () => {
     const value = els.searchInput.value;
-    if (value.trim() && appState.view !== 'library') setView('library');
     window.clearTimeout(searchTimer);
     searchTimer = window.setTimeout(() => {
       appState.query = value;
-      renderLibrary();
+      if (value.trim() && appState.view === 'discover') {
+        setView('movies');
+      }
+      if (appState.detailSeriesId) {
+        appState.detailSeriesId = null;
+        els.seriesDetailView.hidden = true;
+        els.libraryView.hidden = false;
+      }
+      renderCurrentView();
     }, 110);
   });
 
@@ -155,7 +227,15 @@ function bindEvents() {
   els.refreshBtn.addEventListener('click', () => void refreshLibrary());
   els.emptyRefreshBtn.addEventListener('click', () => void refreshLibrary());
 
+  els.structureNoticeClose.addEventListener('click', () => {
+    appState.structureNoticeDismissed = true;
+    els.structureNotice.hidden = true;
+  });
+
+  els.seriesDetailBack.addEventListener('click', backToSeries);
+
   els.playerBack.addEventListener('click', closePlayer);
+  els.playerNext.addEventListener('click', playNextEpisode);
   els.playerVideo.addEventListener('timeupdate', () => saveCurrentProgress(false));
   els.playerVideo.addEventListener('play', () => {
     appState.playbackEnded = false;
@@ -218,23 +298,34 @@ function applySnapshot(snapshot) {
     snapshot.progress && typeof snapshot.progress === 'object'
       ? snapshot.progress
       : {};
+  appState.durations =
+    snapshot.durations && typeof snapshot.durations === 'object'
+      ? snapshot.durations
+      : {};
   appState.links = Array.isArray(snapshot.links) ? snapshot.links : [];
   appState.linksError = snapshot.linksError || null;
   appState.online = snapshot.online !== false;
   appState.initialized = true;
 
+  if (appState.detailSeriesId && !findSeries(appState.detailSeriesId)) {
+    appState.detailSeriesId = null;
+    els.seriesDetailView.hidden = true;
+  }
+
   els.loadingState.hidden = true;
   updateStatus();
   updateOnlineUi();
-  renderLibrary();
+  renderCurrentView();
   renderDiscover();
 }
 
 function setView(view) {
-  if (view !== 'library' && view !== 'discover') return;
+  if (view !== 'movies' && view !== 'series' && view !== 'discover') return;
   appState.view = view;
+  appState.detailSeriesId = null;
 
-  els.libraryView.hidden = view !== 'library';
+  els.libraryView.hidden = view === 'discover';
+  els.seriesDetailView.hidden = true;
   els.discoverView.hidden = view !== 'discover';
 
   for (const tab of els.tabs) {
@@ -244,17 +335,72 @@ function setView(view) {
     else tab.removeAttribute('aria-current');
   }
 
+  updateSearchPlaceholder();
+
   if (view === 'discover') {
     void refreshLinks();
     void refreshNetworkStatus();
+    renderDiscover();
+  } else {
+    renderLibrary();
   }
+
+  const main = document.getElementById('main');
+  if (main) main.scrollTop = 0;
 }
 
-function allItems() {
-  if (!appState.library || !Array.isArray(appState.library.categories)) return [];
-  return appState.library.categories.flatMap((category) =>
-    Array.isArray(category.items) ? category.items : [],
-  );
+function renderCurrentView() {
+  if (!appState.initialized) return;
+  if (appState.detailSeriesId) {
+    renderSeriesDetail();
+    return;
+  }
+  if (appState.view === 'discover') {
+    renderDiscover();
+    return;
+  }
+  renderLibrary();
+}
+
+function updateSearchPlaceholder() {
+  els.searchInput.placeholder =
+    appState.view === 'series'
+      ? 'Buscar en Series…'
+      : appState.view === 'discover'
+        ? 'Buscar por título…'
+        : 'Buscar en Películas…';
+}
+
+function findSeries(seriesId) {
+  return allSeries().find((series) => series.id === seriesId) || null;
+}
+
+function allMovies() {
+  if (!appState.library || !Array.isArray(appState.library.movies)) return [];
+  return appState.library.movies;
+}
+
+function allSeries() {
+  if (!appState.library || !Array.isArray(appState.library.series)) return [];
+  return appState.library.series;
+}
+
+function allEpisodes(seriesList = allSeries()) {
+  const episodes = [];
+  for (const series of seriesList) {
+    for (const season of series.seasons || []) {
+      for (const episode of season.episodes || []) {
+        episodes.push(episode);
+      }
+    }
+  }
+  return episodes;
+}
+
+function episodesOfSeries(seriesId) {
+  const series = findSeries(seriesId);
+  if (!series) return [];
+  return allEpisodes([series]);
 }
 
 function progressFor(id) {
@@ -264,10 +410,26 @@ function progressFor(id) {
   return progress;
 }
 
-function continueWatchingItems() {
-  return allItems()
-    .map((item) => ({ item, progress: progressFor(item.id) }))
-    .filter(({ progress }) => progress && progress.position >= 5)
+function continueEntries(kind) {
+  if (kind === 'movies') {
+    return allMovies()
+      .map((item) => ({ item, progress: progressFor(item.id) }))
+      .filter(({ progress }) => progress && progress.position >= 5)
+      .sort((a, b) => (b.progress.updatedAt || 0) - (a.progress.updatedAt || 0))
+      .slice(0, 20);
+  }
+
+  const bySeries = new Map();
+  for (const episode of allEpisodes()) {
+    const progress = progressFor(episode.id);
+    if (!progress || progress.position < 5) continue;
+    const current = bySeries.get(episode.seriesId);
+    if (!current || (progress.updatedAt || 0) > (current.progress.updatedAt || 0)) {
+      bySeries.set(episode.seriesId, { item: episode, progress });
+    }
+  }
+
+  return [...bySeries.values()]
     .sort((a, b) => (b.progress.updatedAt || 0) - (a.progress.updatedAt || 0))
     .slice(0, 20);
 }
@@ -275,106 +437,157 @@ function continueWatchingItems() {
 function renderLibrary() {
   if (!appState.initialized) return;
 
-  // Las tarjetas se reconstruyen por completo en cada render; se reinicia el
-  // observador para no retener nodos antiguos.
-  thumbObserver.disconnect();
-  thumbQueue.pendingCards = new WeakMap();
+  resetObservers();
+  resetMediaQueues();
+  els.seriesDetailView.hidden = true;
 
+  const isSeriesView = appState.view === 'series';
   const library = appState.library;
   const configured = Boolean(appState.config.videoRoot);
-  const items = allItems();
   const query = appState.query.trim();
 
   els.rows.textContent = '';
   els.rows.hidden = false;
+  els.emptyState.hidden = true;
+  updateStructureNotice();
+
+  els.libraryEyebrow.textContent = isSeriesView ? 'Series' : 'Películas';
+  els.libraryTitle.innerHTML = isSeriesView
+    ? 'Tus series, <span>en casa</span>'
+    : 'Tu cine, <span>en casa</span>';
+  updateSearchPlaceholder();
 
   if (!configured) {
     els.librarySummary.textContent =
       'Elige una carpeta para empezar. Tus vídeos no salen de este equipo.';
     showEmptyState({
       title: 'Tu cine, a un clic',
-      text: 'Elige la carpeta donde guardas tus vídeos. Cada subcarpeta se convertirá en una fila y los vídeos sueltos aparecerán en «Sin categoría».',
+      text: 'Elige la carpeta donde guardas tus vídeos. CasaFlix creará dentro las carpetas «Peliculas» y «Series» para organizarlo todo.',
       showRefresh: false,
       chooseLabel: 'Elegir carpeta de vídeos',
+      hint:
+        'Formatos admitidos: MP4, WebM y M4V. Las carátulas <code>poster.jpg</code> o <code>folder.jpg</code> son opcionales.',
     });
     updateStatus();
     return;
   }
 
   if (!library || library.error) {
-    const message =
-      (library && library.error) || 'No se pudo leer la carpeta de vídeos.';
+    const message = (library && library.error) || 'No se pudo leer la carpeta de vídeos.';
     els.librarySummary.textContent = message;
     showEmptyState({
       title: 'La carpeta no está disponible',
       text: `${message} Puedes volver a intentarlo o elegir otra carpeta.`,
       showRefresh: true,
       chooseLabel: 'Elegir otra carpeta',
+      hint:
+        'Comprueba que la carpeta sigue existiendo y que CasaFlix tiene permiso para leerla.',
     });
     updateStatus();
     return;
   }
 
-  if (items.length === 0) {
-    els.librarySummary.textContent = `No hay vídeos compatibles en «${library.folderName || 'la carpeta'}».`;
-    showEmptyState({
-      title: 'Esta carpeta está vacía',
-      text: 'No se han encontrado archivos MP4, WebM o M4V. Añade vídeos a la carpeta o elige otra distinta.',
-      showRefresh: true,
-      chooseLabel: 'Elegir otra carpeta',
-    });
-    updateStatus();
-    return;
-  }
-
-  els.emptyState.hidden = true;
-  const categoryCount = library.categories.length;
+  const movies = allMovies();
+  const series = allSeries();
+  const episodes = allEpisodes(series);
   const warnings = library.warnings
-    ? ` · ${library.warnings} ${library.warnings === 1 ? 'aviso' : 'avisos'} de lectura`
+    ? ` · ${countLabel(library.warnings, 'aviso', 'avisos')} de lectura`
     : '';
-  const baseMeta = `${countLabel(items.length, 'vídeo', 'vídeos')} · ${countLabel(
-    categoryCount,
-    'categoría',
-    'categorías',
-  )}${warnings}`;
 
   if (query) {
     const normalizedQuery = normalizeText(query);
-    const matches = items.filter((item) =>
-      normalizeText(item.title).includes(normalizedQuery),
-    );
-    els.librarySummary.textContent = `${countLabel(
-      matches.length,
-      'resultado',
-      'resultados',
-    )} para «${query}» · ${library.folderName || ''}`;
+    if (isSeriesView) {
+      const matches = series.filter(
+        (entry) =>
+          normalizeText(entry.title).includes(normalizedQuery) ||
+          allEpisodes([entry]).some((episode) =>
+            normalizeText(episode.title).includes(normalizedQuery),
+          ),
+      );
+      els.librarySummary.textContent = `${countLabel(
+        matches.length,
+        'resultado',
+        'resultados',
+      )} para «${query}» · ${library.folderName || ''}`;
 
-    if (matches.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'empty-inline';
-      const title = document.createElement('h2');
-      title.textContent = 'Sin resultados';
-      const text = document.createElement('p');
-      text.textContent = `No hay títulos que coincidan con «${query}». Prueba con otras palabras.`;
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'text-button';
-      button.textContent = 'Limpiar búsqueda';
-      button.addEventListener('click', clearSearch);
-      empty.append(title, text, button);
-      els.rows.append(empty);
-      updateStatus();
-      return;
+      if (matches.length === 0) {
+        appendSearchEmpty(query);
+      } else {
+        els.rows.append(
+          buildCollection(
+            'Resultados',
+            matches.length,
+            buildSeriesGrid(matches),
+          ),
+        );
+      }
+    } else {
+      const matches = movies.filter((movie) =>
+        normalizeText(movie.title).includes(normalizedQuery),
+      );
+      els.librarySummary.textContent = `${countLabel(
+        matches.length,
+        'resultado',
+        'resultados',
+      )} para «${query}» · ${library.folderName || ''}`;
+
+      if (matches.length === 0) {
+        appendSearchEmpty(query);
+      } else {
+        els.rows.append(
+          buildCollection('Resultados', matches.length, buildMovieGrid(matches)),
+        );
+      }
     }
-
-    els.rows.append(buildRow('Resultados', matches, { showCategory: true }));
     updateStatus();
     return;
   }
 
-  els.librarySummary.textContent = `${baseMeta} · ${library.folderName || ''}`;
+  if (isSeriesView) {
+    els.librarySummary.textContent = `${countLabel(
+      series.length,
+      'serie',
+      'series',
+    )} · ${countLabel(episodes.length, 'episodio', 'episodios')}${warnings} · ${
+      library.folderName || ''
+    }`;
 
-  const continueItems = continueWatchingItems();
+    if (series.length === 0) {
+      showEmptyState({
+        title: 'Aún no hay series',
+        text: 'Crea una carpeta por serie dentro de «Series». Dentro puedes añadir subcarpetas por temporada o dejar los episodios directamente.',
+        showRefresh: true,
+        chooseLabel: 'Cambiar de carpeta',
+        hint:
+          'Ejemplo: <code>Series/Mi serie/Temporada 1/Episodio 1.mp4</code>. También se acepta <code>Películas</code> con tilde.',
+      });
+      updateStatus();
+      return;
+    }
+  } else {
+    els.librarySummary.textContent = `${countLabel(
+      movies.length,
+      'película',
+      'películas',
+    )}${warnings} · ${library.folderName || ''}`;
+
+    if (movies.length === 0) {
+      showEmptyState({
+        title: 'Aún no hay películas',
+        text: 'Guarda tus películas dentro de la carpeta «Peliculas». Cada vídeo compatible aparecerá aquí con su carátula y duración.',
+        showRefresh: true,
+        chooseLabel: 'Cambiar de carpeta',
+        hint:
+          'Formatos admitidos: MP4, WebM y M4V. También se acepta <code>Películas</code> con tilde.',
+      });
+      updateStatus();
+      return;
+    }
+  }
+
+  els.emptyState.hidden = true;
+
+  const continueItems = continueEntries(isSeriesView ? 'series' : 'movies');
   if (continueItems.length > 0) {
     els.rows.append(
       buildRow(
@@ -384,25 +597,274 @@ function renderLibrary() {
           progressById: new Map(
             continueItems.map((entry) => [entry.item.id, entry.progress]),
           ),
-          continueRow: true,
+          kind: isSeriesView ? 'episode' : 'movie',
         },
       ),
     );
   }
 
-  for (const category of library.categories) {
-    if (!category.items || category.items.length === 0) continue;
-    els.rows.append(buildRow(category.name, category.items));
+  if (isSeriesView) {
+    els.rows.append(
+      buildCollection('Todas tus series', series.length, buildSeriesGrid(series)),
+    );
+  } else {
+    els.rows.append(
+      buildCollection(
+        'Todas tus películas',
+        movies.length,
+        buildMovieGrid(movies),
+      ),
+    );
   }
 
   updateStatus();
 }
 
+function backToSeries() {
+  appState.detailSeriesId = null;
+  appState.view = 'series';
+  els.seriesDetailView.hidden = true;
+  els.libraryView.hidden = false;
+  els.discoverView.hidden = true;
+  for (const tab of els.tabs) {
+    const isActive = tab.dataset.view === 'series';
+    tab.classList.toggle('is-active', isActive);
+    if (isActive) tab.setAttribute('aria-current', 'page');
+    else tab.removeAttribute('aria-current');
+  }
+  updateSearchPlaceholder();
+  renderLibrary();
+  const main = document.getElementById('main');
+  if (main) main.scrollTop = 0;
+}
+
+function openSeriesDetail(seriesId) {
+  const series = findSeries(seriesId);
+  if (!series) return;
+
+  appState.detailSeriesId = seriesId;
+  appState.view = 'series';
+  for (const tab of els.tabs) {
+    const isActive = tab.dataset.view === 'series';
+    tab.classList.toggle('is-active', isActive);
+    if (isActive) tab.setAttribute('aria-current', 'page');
+    else tab.removeAttribute('aria-current');
+  }
+  renderSeriesDetail();
+  const main = document.getElementById('main');
+  if (main) main.scrollTop = 0;
+}
+
+function renderSeriesDetail() {
+  const series = findSeries(appState.detailSeriesId);
+  if (!series) {
+    appState.detailSeriesId = null;
+    setView('series');
+    return;
+  }
+
+  resetObservers();
+  resetMediaQueues();
+  els.libraryView.hidden = true;
+  els.discoverView.hidden = true;
+  els.seriesDetailView.hidden = false;
+
+  els.seriesDetailTitle.textContent = series.title;
+  els.seriesDetailMeta.textContent = `${countLabel(
+    series.seasonCount,
+    'temporada',
+    'temporadas',
+  )} · ${countLabel(series.episodeCount, 'episodio', 'episodios')}`;
+
+  els.seriesDetailPoster.textContent = '';
+  const posterImg = document.createElement('img');
+  posterImg.alt = '';
+  posterImg.decoding = 'async';
+  posterImg.dataset.itemId = series.firstEpisodeId;
+  const posterPlaceholder = document.createElement('div');
+  posterPlaceholder.className = `card-placeholder tone-${toneFor(series.id)}`;
+  const posterInitials = document.createElement('span');
+  posterInitials.className = 'card-initials';
+  posterInitials.textContent = titleInitials(series.title);
+  posterPlaceholder.append(posterInitials);
+  els.seriesDetailPoster.append(posterPlaceholder, posterImg);
+
+  attachImage({
+    element: els.seriesDetailPoster,
+    img: posterImg,
+    placeholder: posterPlaceholder,
+    posterUrl: series.posterUrl,
+    thumbUrl: series.thumbUrl,
+    thumbItem: {
+      id: series.firstEpisodeId,
+      mediaUrl: series.firstEpisodeMediaUrl,
+      thumbUrl: series.thumbUrl,
+    },
+    immediate: true,
+  });
+
+  els.detailSeasons.textContent = '';
+  for (const season of series.seasons) {
+    const section = document.createElement('section');
+    section.className = 'season';
+
+    const head = document.createElement('div');
+    head.className = 'season-head';
+    const title = document.createElement('h2');
+    title.className = 'season-title';
+    title.textContent = season.label;
+    const count = document.createElement('span');
+    count.className = 'season-count';
+    count.textContent = countLabel(season.episodes.length, 'episodio', 'episodios');
+    head.append(title, count);
+
+    const list = document.createElement('div');
+    list.className = 'episode-list';
+    for (const episode of season.episodes) {
+      list.append(createEpisodeRow(episode, season, series));
+    }
+
+    section.append(head, list);
+    els.detailSeasons.append(section);
+  }
+
+  updateStatus();
+}
+
+function createEpisodeRow(episode, season, series) {
+  const row = document.createElement('button');
+  row.type = 'button';
+  row.className = 'episode-row';
+  row.dataset.id = episode.id;
+  row.setAttribute(
+    'aria-label',
+    `Reproducir ${series.title}, ${season.label}, ${episode.episodeLabel}: ${episode.title}`,
+  );
+
+  const thumb = document.createElement('div');
+  thumb.className = 'episode-thumb';
+
+  const placeholder = document.createElement('div');
+  placeholder.className = `card-placeholder tone-${toneFor(episode.id)}`;
+  const initials = document.createElement('span');
+  initials.className = 'card-initials';
+  initials.textContent = String(episode.episodeNumber || '').padStart(2, '0');
+  placeholder.append(initials);
+
+  const img = document.createElement('img');
+  img.className = 'card-img';
+  img.alt = '';
+  img.decoding = 'async';
+  img.loading = 'lazy';
+  img.dataset.itemId = episode.id;
+  img.hidden = true;
+
+  thumb.append(placeholder, img);
+  attachImage({
+    element: row,
+    img,
+    placeholder,
+    posterUrl: null,
+    thumbUrl: episode.thumbUrl,
+    thumbItem: episode,
+  });
+
+  const progress = progressFor(episode.id);
+  if (progress && progress.duration > 0) {
+    const percent = Math.max(
+      1,
+      Math.min(100, Math.round((progress.position / progress.duration) * 100)),
+    );
+    const tag = document.createElement('span');
+    tag.className = 'card-tag';
+    tag.textContent = `Continuar · ${percent} %`;
+    thumb.append(tag);
+
+    const bar = document.createElement('span');
+    bar.className = 'card-progress';
+    const fill = document.createElement('span');
+    fill.style.width = `${percent}%`;
+    bar.append(fill);
+    thumb.append(bar);
+  }
+
+  const info = document.createElement('div');
+  info.className = 'episode-info';
+
+  const label = document.createElement('p');
+  label.className = 'episode-label';
+  label.textContent = episode.episodeLabel;
+  const duration = document.createElement('span');
+  duration.dataset.durationFor = episode.id;
+  duration.textContent = durationLabel(episode.id);
+  label.append(document.createTextNode(' · '), duration);
+
+  const title = document.createElement('h3');
+  title.className = 'episode-title';
+  title.textContent = episode.title;
+
+  const meta = document.createElement('p');
+  meta.className = 'episode-meta';
+  if (progress) {
+    meta.textContent = `Continuar · ${formatTime(progress.position)}`;
+  } else {
+    meta.textContent = season.label;
+  }
+
+  info.append(label, title, meta);
+
+  const play = document.createElement('span');
+  play.className = 'episode-play';
+  play.innerHTML =
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.2v13.6L19 12z" fill="currentColor"/></svg>';
+
+  row.append(thumb, info, play);
+  row.addEventListener('click', () => openPlayer(episode));
+  observeDuration(row, episode);
+
+  return row;
+}
+
+function appendSearchEmpty(query) {
+  const empty = document.createElement('div');
+  empty.className = 'empty-inline';
+  const title = document.createElement('h2');
+  title.textContent = 'Sin resultados';
+  const text = document.createElement('p');
+  text.textContent = `No hay títulos que coincidan con «${query}». Prueba con otras palabras.`;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'text-button';
+  button.textContent = 'Limpiar búsqueda';
+  button.addEventListener('click', clearSearch);
+  empty.append(title, text, button);
+  els.rows.append(empty);
+}
+
 function clearSearch() {
   els.searchInput.value = '';
   appState.query = '';
-  renderLibrary();
+  renderCurrentView();
   els.searchInput.focus();
+}
+
+function buildCollection(title, count, content) {
+  const section = document.createElement('section');
+  section.className = 'row';
+  section.setAttribute('aria-label', title);
+
+  const head = document.createElement('div');
+  head.className = 'row-head';
+  const heading = document.createElement('h2');
+  heading.className = 'row-title';
+  heading.textContent = title;
+  const label = document.createElement('span');
+  label.className = 'row-count';
+  label.textContent = String(count);
+  head.append(heading, label);
+
+  section.append(head, content);
+  return section;
 }
 
 function buildRow(title, items, options = {}) {
@@ -423,11 +885,9 @@ function buildRow(title, items, options = {}) {
 
   const arrows = document.createElement('div');
   arrows.className = 'row-arrows';
-
   const prev = createArrowButton('left', `Desplazar ${title} a la izquierda`);
   const next = createArrowButton('right', `Desplazar ${title} a la derecha`);
   arrows.append(prev, next);
-
   head.append(heading, count, arrows);
 
   const track = document.createElement('div');
@@ -441,8 +901,7 @@ function buildRow(title, items, options = {}) {
     track.append(
       createCard(item, {
         progress,
-        showCategory: Boolean(options.showCategory),
-        continueRow: Boolean(options.continueRow),
+        kind: options.kind || item.kind,
       }),
     );
   }
@@ -482,19 +941,43 @@ function createArrowButton(direction, label) {
   return button;
 }
 
+function buildMovieGrid(movies) {
+  const grid = document.createElement('div');
+  grid.className = 'media-grid';
+  for (const movie of movies) {
+    grid.append(createCard(movie, { kind: 'movie' }));
+  }
+  return grid;
+}
+
+function buildSeriesGrid(seriesList) {
+  const grid = document.createElement('div');
+  grid.className = 'media-grid';
+  for (const series of seriesList) {
+    grid.append(createSeriesCard(series));
+  }
+  return grid;
+}
+
 function createCard(item, options = {}) {
+  const isEpisode = options.kind === 'episode' || Boolean(item.seriesId);
   const card = document.createElement('button');
   card.type = 'button';
   card.className = 'card';
   card.dataset.id = item.id;
-  card.setAttribute('aria-label', `Reproducir ${item.title}`);
+  card.dataset.kind = isEpisode ? 'episode' : 'movie';
+  card.setAttribute(
+    'aria-label',
+    isEpisode
+      ? `Reproducir ${item.seriesTitle || ''}, ${item.episodeLabel || ''}: ${item.title}`
+      : `Reproducir ${item.title}`,
+  );
 
   const media = document.createElement('div');
   media.className = 'card-media';
 
   const placeholder = document.createElement('div');
   placeholder.className = `card-placeholder tone-${toneFor(item.id)}`;
-
   const initials = document.createElement('span');
   initials.className = 'card-initials';
   initials.textContent = titleInitials(item.title);
@@ -506,42 +989,17 @@ function createCard(item, options = {}) {
   img.decoding = 'async';
   img.loading = 'lazy';
   img.dataset.itemId = item.id;
-
-  if (item.posterUrl) {
-    img.dataset.source = 'poster';
-    img.src = item.posterUrl;
-    img.hidden = false;
-    img.addEventListener('load', () => {
-      placeholder.hidden = true;
-    });
-    img.addEventListener('error', () => {
-      img.hidden = true;
-      placeholder.hidden = false;
-      img.dataset.source = 'none';
-      requestThumb({ card, item, img, placeholder });
-    });
-  } else if (item.thumbUrl) {
-    img.dataset.source = 'thumb';
-    img.dataset.thumbState = 'done';
-    img.src = item.thumbUrl;
-    img.hidden = false;
-    img.addEventListener('load', () => {
-      placeholder.hidden = true;
-    });
-    img.addEventListener('error', () => {
-      img.hidden = true;
-      placeholder.hidden = false;
-      img.dataset.thumbState = 'failed';
-    });
-  } else {
-    img.hidden = true;
-    if (!thumbQueue.failed.has(item.id)) {
-      thumbQueue.pendingCards.set(card, { card, item, img, placeholder });
-      thumbObserver.observe(card);
-    }
-  }
+  img.hidden = true;
 
   media.append(placeholder, img);
+  attachImage({
+    element: card,
+    img,
+    placeholder,
+    posterUrl: isEpisode ? null : item.posterUrl,
+    thumbUrl: item.thumbUrl,
+    thumbItem: item,
+  });
 
   const play = document.createElement('span');
   play.className = 'card-play';
@@ -553,26 +1011,27 @@ function createCard(item, options = {}) {
   if (progress) {
     const percent =
       progress.duration > 0
-        ? Math.max(1, Math.min(100, Math.round((progress.position / progress.duration) * 100)))
+        ? Math.max(
+            1,
+            Math.min(
+              100,
+              Math.round((progress.position / progress.duration) * 100),
+            ),
+          )
         : 0;
 
-    if (percent > 0) {
-      const tag = document.createElement('span');
-      tag.className = 'card-tag';
-      tag.textContent = `Continuar · ${percent} %`;
-      media.append(tag);
+    const tag = document.createElement('span');
+    tag.className = 'card-tag';
+    tag.textContent = percent > 0 ? `Continuar · ${percent} %` : 'Continuar';
+    media.append(tag);
 
+    if (percent > 0) {
       const bar = document.createElement('span');
       bar.className = 'card-progress';
       const fill = document.createElement('span');
       fill.style.width = `${percent}%`;
       bar.append(fill);
       media.append(bar);
-    } else {
-      const tag = document.createElement('span');
-      tag.className = 'card-tag';
-      tag.textContent = 'Continuar';
-      media.append(tag);
     }
   }
 
@@ -585,41 +1044,200 @@ function createCard(item, options = {}) {
 
   const meta = document.createElement('p');
   meta.className = 'card-meta';
-  if (progress) {
-    const parts = [];
+  if (isEpisode) {
+    meta.textContent = [item.seriesTitle, item.episodeLabel]
+      .filter(Boolean)
+      .join(' · ');
+  } else if (progress) {
     if (progress.duration > 0) {
-      parts.push(
-        `${formatTime(progress.position)} de ${formatTime(progress.duration)}`,
-      );
+      meta.textContent = `${formatTime(progress.position)} de ${formatTime(
+        progress.duration,
+      )}`;
     } else {
-      parts.push(`Visto hasta ${formatTime(progress.position)}`);
+      meta.textContent = `Visto hasta ${formatTime(progress.position)}`;
     }
-    if (options.showCategory && item.category) parts.push(item.category);
-    meta.textContent = parts.join(' · ');
   } else {
-    meta.textContent = item.category || '';
+    const duration = document.createElement('span');
+    duration.dataset.durationFor = item.id;
+    duration.textContent = durationLabel(item.id);
+    meta.append(duration);
   }
 
   body.append(title, meta);
   card.append(media, body);
 
   card.addEventListener('click', () => openPlayer(item));
+  observeDuration(card, item);
 
   return card;
 }
 
-function requestThumb(record) {
-  if (record.item.thumbUrl) {
-    setCardThumb(record.item, record);
-    return;
-  }
-  if (thumbQueue.failed.has(record.item.id)) return;
-  enqueueThumbnail(record.item);
+function createSeriesCard(series) {
+  const card = document.createElement('button');
+  card.type = 'button';
+  card.className = 'card series-card';
+  card.dataset.seriesId = series.id;
+  card.setAttribute('aria-label', `Abrir serie ${series.title}`);
+
+  const media = document.createElement('div');
+  media.className = 'card-media';
+
+  const placeholder = document.createElement('div');
+  placeholder.className = `card-placeholder tone-${toneFor(series.id)}`;
+  const initials = document.createElement('span');
+  initials.className = 'card-initials';
+  initials.textContent = titleInitials(series.title);
+  placeholder.append(initials);
+
+  const img = document.createElement('img');
+  img.className = 'card-img';
+  img.alt = '';
+  img.decoding = 'async';
+  img.loading = 'lazy';
+  img.dataset.itemId = series.firstEpisodeId;
+  img.hidden = true;
+
+  media.append(placeholder, img);
+  attachImage({
+    element: card,
+    img,
+    placeholder,
+    posterUrl: series.posterUrl,
+    thumbUrl: series.thumbUrl,
+    thumbItem: {
+      id: series.firstEpisodeId,
+      mediaUrl: series.firstEpisodeMediaUrl,
+      thumbUrl: series.thumbUrl,
+    },
+  });
+
+  const play = document.createElement('span');
+  play.className = 'card-play';
+  play.innerHTML =
+    '<span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6.5v11L17 12z" fill="currentColor"/></svg></span>';
+  media.append(play);
+
+  const body = document.createElement('div');
+  body.className = 'card-body';
+
+  const title = document.createElement('p');
+  title.className = 'card-title';
+  title.textContent = series.title;
+
+  const meta = document.createElement('p');
+  meta.className = 'card-meta';
+  meta.textContent = `${countLabel(
+    series.seasonCount,
+    'temporada',
+    'temporadas',
+  )} · ${countLabel(series.episodeCount, 'episodio', 'episodios')}`;
+
+  body.append(title, meta);
+  card.append(media, body);
+  card.addEventListener('click', () => openSeriesDetail(series.id));
+
+  return card;
 }
 
-function enqueueThumbnail(item) {
-  if (!item || !item.id || item.thumbUrl) return;
+function attachImage({
+  element,
+  img,
+  placeholder,
+  posterUrl,
+  thumbUrl,
+  thumbItem,
+  immediate = false,
+}) {
+  const showThumb = (url) => {
+    if (!url || !img.isConnected) return;
+    img.dataset.source = 'thumb';
+    img.hidden = false;
+    img.src = url;
+    img.addEventListener(
+      'load',
+      () => {
+        placeholder.hidden = true;
+      },
+      { once: true },
+    );
+    img.addEventListener(
+      'error',
+      () => {
+        img.hidden = true;
+        placeholder.hidden = false;
+      },
+      { once: true },
+    );
+  };
+
+  const requestFallback = () => {
+    if (!thumbItem || !thumbItem.id) return;
+    if (thumbItem.thumbUrl) {
+      showThumb(thumbItem.thumbUrl);
+      return;
+    }
+    if (immediate) {
+      requestThumb(thumbItem, showThumb);
+      return;
+    }
+    observeThumb(element, {
+      img,
+      placeholder,
+      start: () => requestThumb(thumbItem, showThumb),
+    });
+  };
+
+  if (posterUrl) {
+    img.dataset.source = 'poster';
+    img.hidden = false;
+    img.src = posterUrl;
+    img.addEventListener(
+      'load',
+      () => {
+        placeholder.hidden = true;
+      },
+      { once: true },
+    );
+    img.addEventListener(
+      'error',
+      () => {
+        img.hidden = true;
+        img.removeAttribute('src');
+        placeholder.hidden = false;
+        requestFallback();
+      },
+      { once: true },
+    );
+    return;
+  }
+
+  if (thumbUrl) {
+    showThumb(thumbUrl);
+    return;
+  }
+
+  requestFallback();
+}
+
+// ---------------------------------------------------------------------------
+// Miniaturas: generación de fotogramas
+// ---------------------------------------------------------------------------
+
+function requestThumb(item, callback) {
+  if (!item || !item.id) return;
+  if (item.thumbUrl) {
+    if (callback) callback(item.thumbUrl);
+    return;
+  }
   if (thumbQueue.failed.has(item.id)) return;
+
+  let callbacks = thumbQueue.callbacks.get(item.id);
+  if (!callbacks) {
+    callbacks = new Set();
+    thumbQueue.callbacks.set(item.id, callbacks);
+  }
+  if (callback) callbacks.add(callback);
+
   if (thumbQueue.inFlight.has(item.id) || thumbQueue.queuedIds.has(item.id)) {
     return;
   }
@@ -630,21 +1248,33 @@ function enqueueThumbnail(item) {
 }
 
 function pumpThumbQueue() {
-  while (thumbQueue.active < THUMB_CONCURRENCY && thumbQueue.items.length > 0) {
+  while (thumbQueue.active < MEDIA_CONCURRENCY && thumbQueue.items.length > 0) {
     const item = thumbQueue.items.shift();
+    if (!item) continue;
     thumbQueue.queuedIds.delete(item.id);
-    if (!item || item.thumbUrl || thumbQueue.failed.has(item.id)) continue;
+    if (item.thumbUrl || thumbQueue.failed.has(item.id)) continue;
 
     thumbQueue.active += 1;
     const task = generateThumbnail(item)
       .then((url) => {
         if (!url) return;
-        item.thumbUrl = url;
-        applyThumbToDom(item);
+        for (const episode of allEpisodes()) {
+          if (episode.id === item.id) episode.thumbUrl = url;
+        }
+        for (const series of allSeries()) {
+          if (series.firstEpisodeId === item.id) series.thumbUrl = url;
+        }
+        applyThumbToDom(item.id, url);
+        const callbacks = thumbQueue.callbacks.get(item.id);
+        if (callbacks) {
+          for (const callback of callbacks) callback(url);
+          thumbQueue.callbacks.delete(item.id);
+        }
       })
       .catch((error) => {
         console.warn('[CasaFlix] No se pudo crear la miniatura:', error.message);
         thumbQueue.failed.add(item.id);
+        thumbQueue.callbacks.delete(item.id);
       })
       .finally(() => {
         thumbQueue.inFlight.delete(item.id);
@@ -781,17 +1411,18 @@ async function seekVideo(video, target) {
   });
 }
 
-function applyThumbToDom(item) {
-  if (!item.thumbUrl) return;
-  const images = document.querySelectorAll(`.card-img[data-item-id="${item.id}"]`);
+function applyThumbToDom(itemId, url) {
+  const images = document.querySelectorAll(`img[data-item-id="${itemId}"]`);
   for (const img of images) {
     if (img.dataset.source === 'poster') continue;
-    const media = img.closest('.card-media');
-    const placeholder = media ? media.querySelector('.card-placeholder') : null;
     img.dataset.source = 'thumb';
-    img.dataset.thumbState = 'done';
     img.hidden = false;
-    img.src = item.thumbUrl;
+    img.src = url;
+
+    const container = img.closest('.card-media, .episode-thumb, .series-poster');
+    const placeholder = container
+      ? container.querySelector('.card-placeholder')
+      : null;
     if (placeholder) {
       placeholder.hidden = false;
       img.addEventListener(
@@ -806,7 +1437,6 @@ function applyThumbToDom(item) {
       'error',
       () => {
         img.hidden = true;
-        img.dataset.thumbState = 'failed';
         if (placeholder) placeholder.hidden = false;
       },
       { once: true },
@@ -814,21 +1444,139 @@ function applyThumbToDom(item) {
   }
 }
 
-function setCardThumb(item, record) {
-  if (!item.thumbUrl || !record || !record.img) return;
-  const { img, placeholder } = record;
-  img.dataset.source = 'thumb';
-  img.dataset.thumbState = 'done';
-  placeholder.hidden = false;
-  img.hidden = false;
-  img.src = item.thumbUrl;
-  img.addEventListener(
-    'load',
-    () => {
-      placeholder.hidden = true;
-    },
-    { once: true },
-  );
+// ---------------------------------------------------------------------------
+// Duración de los vídeos
+// ---------------------------------------------------------------------------
+
+function itemDuration(itemId) {
+  const entry = appState.durations[itemId];
+  return entry && Number.isFinite(entry.duration) && entry.duration > 0
+    ? entry.duration
+    : null;
+}
+
+function durationLabel(itemId) {
+  const duration = itemDuration(itemId);
+  return duration ? formatDuration(duration) : '—';
+}
+
+function requestDuration(item) {
+  if (!item || !item.id || !item.mediaUrl) return;
+  if (itemDuration(item.id)) {
+    updateDurationDom(item.id, itemDuration(item.id));
+    return;
+  }
+  if (durationQueue.failed.has(item.id)) return;
+
+  if (durationQueue.inFlight.has(item.id) || durationQueue.queuedIds.has(item.id)) {
+    return;
+  }
+
+  durationQueue.queuedIds.add(item.id);
+  durationQueue.items.push(item);
+  pumpDurationQueue();
+}
+
+function pumpDurationQueue() {
+  while (durationQueue.active < MEDIA_CONCURRENCY && durationQueue.items.length > 0) {
+    const item = durationQueue.items.shift();
+    if (!item) continue;
+    durationQueue.queuedIds.delete(item.id);
+    if (itemDuration(item.id) || durationQueue.failed.has(item.id)) continue;
+
+    durationQueue.active += 1;
+    const task = probeDuration(item)
+      .then((duration) => {
+        if (!duration) return;
+        appState.durations[item.id] = {
+          duration,
+          updatedAt: Date.now(),
+        };
+        updateDurationDom(item.id, duration);
+      })
+      .catch((error) => {
+        durationQueue.failed.add(item.id);
+        console.warn('[CasaFlix] No se pudo leer la duración:', error.message);
+      })
+      .finally(() => {
+        durationQueue.inFlight.delete(item.id);
+        durationQueue.active -= 1;
+        pumpDurationQueue();
+      });
+
+    durationQueue.inFlight.set(item.id, task);
+  }
+}
+
+async function probeDuration(item) {
+  const video = document.createElement('video');
+  video.className = 'thumb-work';
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = 'metadata';
+  video.src = item.mediaUrl;
+  document.body.append(video);
+
+  try {
+    video.load();
+    if (video.readyState < 1) {
+      await waitForMediaEvent(video, 'loadedmetadata', 12000);
+    }
+
+    let duration = video.duration;
+    if (!Number.isFinite(duration) || duration <= 0) {
+      duration = await resolveInfiniteDuration(video);
+    }
+
+    if (!Number.isFinite(duration) || duration <= 0) {
+      throw new Error('Duración desconocida.');
+    }
+
+    await api.saveDuration(item.id, duration).catch(() => {});
+    return Math.round(duration * 100) / 100;
+  } finally {
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+    video.remove();
+  }
+}
+
+async function resolveInfiniteDuration(video) {
+  const changed = new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      video.removeEventListener('durationchange', finish);
+      video.removeEventListener('seeked', finish);
+      resolve();
+    };
+    video.addEventListener('durationchange', finish, { once: true });
+    video.addEventListener('seeked', finish, { once: true });
+    window.setTimeout(finish, 1800);
+  });
+
+  try {
+    video.currentTime = 1e7;
+  } catch {
+    return null;
+  }
+
+  await changed;
+  const duration = video.duration;
+  try {
+    video.currentTime = 0;
+  } catch {
+    // Sin búsqueda disponible.
+  }
+  return duration;
+}
+
+function updateDurationDom(itemId, duration) {
+  const label = formatDuration(duration);
+  const nodes = document.querySelectorAll(`[data-duration-for="${itemId}"]`);
+  for (const node of nodes) node.textContent = label;
 }
 
 // ---------------------------------------------------------------------------
@@ -843,12 +1591,16 @@ async function chooseFolder() {
     if (result && result.canceled) return;
     if (result && result.snapshot) {
       applySnapshot(result.snapshot);
-      const count = result.snapshot.library ? result.snapshot.library.itemCount : 0;
-      showToast(
-        count > 0
-          ? `Biblioteca lista: ${countLabel(count, 'vídeo', 'vídeos')}.`
-          : 'La carpeta no contiene vídeos compatibles.',
-      );
+      const library = result.snapshot.library;
+      if (library) {
+        showToast(
+          `Biblioteca lista: ${countLabel(
+            library.movieCount || 0,
+            'película',
+            'películas',
+          )} · ${countLabel(library.seriesCount || 0, 'serie', 'series')}.`,
+        );
+      }
     }
   } catch (error) {
     console.error(error);
@@ -867,8 +1619,14 @@ async function refreshLibrary() {
     if (snapshot.library && snapshot.library.error) {
       showToast(snapshot.library.error, 'error');
     } else {
-      const count = snapshot.library ? snapshot.library.itemCount : 0;
-      showToast(`Biblioteca actualizada: ${countLabel(count, 'vídeo', 'vídeos')}.`);
+      const library = snapshot.library || {};
+      showToast(
+        `Biblioteca actualizada: ${countLabel(
+          library.movieCount || 0,
+          'película',
+          'películas',
+        )} · ${countLabel(library.seriesCount || 0, 'serie', 'series')}.`,
+      );
     }
   } catch (error) {
     console.error(error);
@@ -899,22 +1657,49 @@ function setBusy(busy, message) {
 // ---------------------------------------------------------------------------
 
 function openPlayer(item) {
-  if (!item || appState.playing) return;
+  if (!item) return;
 
+  appState.playQueue = item.seriesId ? episodesOfSeries(item.seriesId) : [];
+  appState.playIndex = appState.playQueue.findIndex((entry) => entry.id === item.id);
+
+  if (!appState.playing) {
+    appState.playing = true;
+    els.playerView.hidden = false;
+    document.body.classList.add('is-playing');
+  }
+
+  startPlayback(item);
+}
+
+function startPlayback(item) {
   appState.currentItem = item;
-  appState.playing = true;
   appState.playbackEnded = false;
   appState.lastSavedAt = 0;
 
+  const isEpisode = Boolean(item.seriesId);
+  const next = nextEpisode();
+
   els.playerTitle.textContent = item.title;
-  els.playerSubtitle.textContent = `${item.category} · ${item.extension
-    .replace('.', '')
-    .toUpperCase()}`;
+  els.playerSubtitle.textContent = isEpisode
+    ? [item.seriesTitle, item.seasonLabel, item.episodeLabel]
+        .filter(Boolean)
+        .join(' · ')
+    : `Película · ${item.extension.replace('.', '').toUpperCase()}`;
   els.playerNotice.hidden = true;
   window.clearTimeout(playerNoticeTimer);
 
-  els.playerView.hidden = false;
-  document.body.classList.add('is-playing');
+  els.playerNext.hidden = !next;
+  els.playerNext.classList.remove('is-highlighted');
+  if (next) {
+    els.playerNext.title = `Siguiente: ${next.episodeLabel} · ${next.title}`;
+    els.playerNext.setAttribute(
+      'aria-label',
+      `Reproducir siguiente episodio: ${next.episodeLabel} · ${next.title}`,
+    );
+  } else {
+    els.playerNext.removeAttribute('title');
+    els.playerNext.removeAttribute('aria-label');
+  }
 
   const video = els.playerVideo;
   const saved = appState.progress[item.id];
@@ -947,13 +1732,38 @@ function openPlayer(item) {
   video.focus();
 }
 
+function nextEpisode() {
+  if (appState.playIndex < 0) return null;
+  return appState.playQueue[appState.playIndex + 1] || null;
+}
+
+function playNextEpisode() {
+  const next = nextEpisode();
+  if (!next) return;
+  if (!appState.playbackEnded) saveCurrentProgress(true);
+  appState.playIndex += 1;
+  startPlayback(next);
+}
+
 function handlePlaybackEnded() {
   const item = appState.currentItem;
   if (!item) return;
   appState.playbackEnded = true;
   delete appState.progress[item.id];
   if (api) api.clearProgress(item.id).catch(() => {});
-  showPlayerNotice('Fin del vídeo. La próxima vez empezará desde el principio.', 7000);
+
+  const next = nextEpisode();
+  if (next) {
+    showPlayerNotice(
+      `Fin del episodio. Siguiente: ${next.episodeLabel} · ${next.title}.`,
+      9000,
+    );
+    els.playerNext.classList.add('is-highlighted');
+  } else if (item.seriesId) {
+    showPlayerNotice('Fin de la serie. La próxima vez empezará desde el principio.', 7000);
+  } else {
+    showPlayerNotice('Fin de la película. La próxima vez empezará desde el principio.', 7000);
+  }
 }
 
 function saveCurrentProgress(force) {
@@ -993,6 +1803,8 @@ function closePlayer() {
   appState.playing = false;
   appState.playbackEnded = false;
   appState.currentItem = null;
+  appState.playQueue = [];
+  appState.playIndex = -1;
 
   video.onloadedmetadata = null;
   video.pause();
@@ -1001,13 +1813,17 @@ function closePlayer() {
 
   els.playerView.hidden = true;
   els.playerNotice.hidden = true;
+  els.playerNext.hidden = true;
   window.clearTimeout(playerNoticeTimer);
   document.body.classList.remove('is-playing');
 
-  renderLibrary();
+  renderCurrentView();
 
   if (item) {
-    const card = els.rows.querySelector(`.card[data-id="${item.id}"]`);
+    const selector = appState.detailSeriesId
+      ? `.episode-row[data-id="${item.id}"]`
+      : `.card[data-id="${item.id}"]`;
+    const card = document.querySelector(selector);
     if (card) card.focus({ preventScroll: true });
   }
 }
@@ -1166,9 +1982,28 @@ function updateOnlineUi() {
 // Estado, textos y avisos
 // ---------------------------------------------------------------------------
 
+function updateStructureNotice() {
+  const library = appState.library;
+  const created = library && library.structure ? library.structure.created : [];
+  if (
+    !created ||
+    created.length === 0 ||
+    appState.structureNoticeDismissed
+  ) {
+    els.structureNotice.hidden = true;
+    return;
+  }
+
+  const names = created.map((name) => `«${name}»`).join(' y ');
+  els.structureNoticeText.textContent =
+    `Hemos creado ${names} dentro de tu carpeta. Guarda cada película en «Peliculas» ` +
+    'y cada serie en su propia carpeta dentro de «Series». Dentro de una serie puedes ' +
+    'usar subcarpetas por temporada o poner los episodios directamente.';
+  els.structureNotice.hidden = false;
+}
+
 function updateStatus() {
   const library = appState.library;
-  const items = allItems();
 
   if (!appState.config.videoRoot) {
     els.statusCount.textContent = 'Sin biblioteca';
@@ -1184,20 +2019,32 @@ function updateStatus() {
     return;
   }
 
-  els.statusCount.textContent = countLabel(items.length, 'vídeo', 'vídeos');
+  const movieCount = library ? library.movieCount || 0 : 0;
+  const seriesCount = library ? library.seriesCount || 0 : 0;
+
+  els.statusCount.textContent = `${countLabel(
+    movieCount,
+    'película',
+    'películas',
+  )} · ${countLabel(seriesCount, 'serie', 'series')}`;
   els.statusFolder.textContent = library && library.folderName
     ? `Carpeta: ${library.folderName}`
     : '';
   if (library && library.warnings > 0) {
-    els.statusFolder.textContent += ` · ${library.warnings} ${library.warnings === 1 ? 'aviso' : 'avisos'} de lectura`;
+    els.statusFolder.textContent += ` · ${countLabel(
+      library.warnings,
+      'aviso',
+      'avisos',
+    )} de lectura`;
   }
 }
 
-function showEmptyState({ title, text, showRefresh, chooseLabel }) {
+function showEmptyState({ title, text, showRefresh, chooseLabel, hint }) {
   els.emptyTitle.textContent = title;
   els.emptyText.textContent = text;
   els.emptyRefreshBtn.hidden = !showRefresh;
   if (chooseLabel) els.emptyChooseBtn.textContent = chooseLabel;
+  if (hint) els.emptyHint.innerHTML = hint;
   els.emptyState.hidden = false;
   els.rows.hidden = true;
 }
@@ -1251,6 +2098,15 @@ function formatTime(seconds) {
     return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   }
   return `${minutes}:${String(secs).padStart(2, '0')}`;
+}
+
+function formatDuration(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  if (total < 60) return `${total} s`;
+  if (total < 3600) return `${Math.round(total / 60)} min`;
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.round((total % 3600) / 60);
+  return minutes > 0 ? `${hours} h ${minutes} min` : `${hours} h`;
 }
 
 function countLabel(count, singular, plural) {

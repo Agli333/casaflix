@@ -11,55 +11,117 @@ const fs = require('node:fs/promises');
 const ROOT = path.join(__dirname, '..', '.test-media');
 
 const CLIPS = [
+  // Películas: cada vídeo dentro de Peliculas es una película.
   {
-    file: 'Naturaleza/Atardecer en la costa.webm',
+    file: 'Peliculas/Atardecer en la costa.webm',
     title: 'Atardecer en la costa',
-    subtitle: 'CasaFlix · vídeo de prueba',
+    subtitle: 'Película · CasaFlix',
     palette: ['#ff8a65', '#5b2c3a', '#151018'],
+    durationMs: 9000,
+  },
+  {
+    file: 'Peliculas/Bosque de niebla.webm',
+    title: 'Bosque de niebla',
+    subtitle: 'Película · CasaFlix',
+    palette: ['#2a8d84', '#123a3f', '#081014'],
+    durationMs: 14000,
+  },
+  {
+    file: 'Peliculas/Ruta por la montaña.webm',
+    title: 'Ruta por la montaña',
+    subtitle: 'Película · CasaFlix',
+    palette: ['#b39144', '#4b3a17', '#120f08'],
+    durationMs: 7000,
+  },
+
+  // Serie con dos temporadas y episodios 1, 2 y 10.
+  {
+    file: 'Series/La casa del faro/Temporada 1/Episodio 1 - La llegada.webm',
+    title: 'Episodio 1 · La llegada',
+    subtitle: 'La casa del faro · T1',
+    palette: ['#4b7fb8', '#182b42', '#080d14'],
     durationMs: 5000,
   },
   {
-    file: 'Naturaleza/Bosque de niebla.webm',
-    title: 'Bosque de niebla',
-    subtitle: 'CasaFlix · vídeo de prueba',
-    palette: ['#2a8d84', '#123a3f', '#081014'],
-    durationMs: 16000,
+    file: 'Series/La casa del faro/Temporada 1/Episodio 2 - La tormenta.webm',
+    title: 'Episodio 2 · La tormenta',
+    subtitle: 'La casa del faro · T1',
+    palette: ['#3f6c9e', '#142436', '#070c12'],
+    durationMs: 5000,
   },
   {
-    file: 'Viajes/2026/Ruta por la montaña.webm',
-    title: 'Ruta por la montaña',
-    subtitle: 'CasaFlix · vídeo de prueba',
-    palette: ['#b39144', '#4b3a17', '#120f08'],
-    durationMs: 6000,
+    file: 'Series/La casa del faro/Temporada 1/Episodio 10 - El regreso.webm',
+    title: 'Episodio 10 · El regreso',
+    subtitle: 'La casa del faro · T1',
+    palette: ['#5a86b5', '#1b3048', '#080e16'],
+    durationMs: 5000,
   },
   {
-    file: 'Cortos/Serie/Clip anidado.webm',
-    title: 'Clip anidado',
-    subtitle: 'CasaFlix · vídeo de prueba',
+    file: 'Series/La casa del faro/Temporada 2/Episodio 1 - Nuevo horizonte.webm',
+    title: 'Episodio 1 · Nuevo horizonte',
+    subtitle: 'La casa del faro · T2',
     palette: ['#7858a3', '#2a1f42', '#0d0a14'],
     durationMs: 5000,
   },
+
+  // Serie sin subcarpetas de temporada: todos los episodios son la T1.
   {
-    file: 'Bienvenida.webm',
-    title: 'Bienvenida',
-    subtitle: 'CasaFlix · vídeo de prueba',
-    palette: ['#4b7fb8', '#182b42', '#080d14'],
+    file: 'Series/Crónicas del valle/Episodio 1 - Primer día.webm',
+    title: 'Episodio 1 · Primer día',
+    subtitle: 'Crónicas del valle',
+    palette: ['#8a9e4b', '#2c3318', '#0c0f07'],
+    durationMs: 5000,
+  },
+  {
+    file: 'Series/Crónicas del valle/Episodio 2 - La cosecha.webm',
+    title: 'Episodio 2 · La cosecha',
+    subtitle: 'Crónicas del valle',
+    palette: ['#6f8a3f', '#232a13', '#090b06'],
+    durationMs: 5000,
+  },
+  {
+    file: 'Series/Crónicas del valle/Episodio 10 - Despedida.webm',
+    title: 'Episodio 10 · Despedida',
+    subtitle: 'Crónicas del valle',
+    palette: ['#a0b25c', '#343d1e', '#0e1108'],
+    durationMs: 5000,
+  },
+
+  // Serie de una sola temporada y sin carátula: usa la miniatura del primer episodio.
+  {
+    file: 'Series/Mediodía/Temporada 1/Episodio 1 - Amanecer.webm',
+    title: 'Episodio 1 · Amanecer',
+    subtitle: 'Mediodía · T1',
+    palette: ['#c98a4b', '#4a2f18', '#140d07'],
+    durationMs: 5000,
+  },
+  {
+    file: 'Series/Mediodía/Temporada 1/Episodio 2 - Mediodía.webm',
+    title: 'Episodio 2 · Mediodía',
+    subtitle: 'Mediodía · T1',
+    palette: ['#d9a45c', '#553a1e', '#171007'],
     durationMs: 5000,
   },
 ];
 
 const POSTERS = [
   {
-    file: 'Naturaleza/folder.jpg',
-    title: 'Naturaleza',
-    subtitle: 'Carátula folder.jpg',
-    palette: ['#2a8d84', '#0d2a2d'],
+    file: 'Peliculas/Atardecer en la costa.jpg',
+    title: 'Atardecer en la costa',
+    subtitle: 'Carátula con el nombre de la película',
+    palette: ['#ff8a65', '#2a1a18'],
   },
   {
-    file: 'Cortos/Serie/poster.jpg',
-    title: 'Cortos',
+    file: 'Series/La casa del faro/poster.jpg',
+    title: 'La casa del faro',
     subtitle: 'Carátula poster.jpg',
-    palette: ['#7858a3', '#211735'],
+    palette: ['#4b7fb8', '#101a26'],
+  },
+  {
+    file: 'Series/Crónicas del valle/folder.jpg',
+    title: 'Crónicas del valle',
+    subtitle: 'Carátula folder.jpg',
+    palette: ['#8a9e4b', '#1c2110'],
   },
 ];
 
@@ -241,10 +303,16 @@ async function main() {
     console.log('ok');
   }
 
-  await fs.mkdir(path.join(ROOT, 'Vacía'), { recursive: true });
+  await fs.mkdir(path.join(ROOT, 'Peliculas', 'Extras'), { recursive: true });
+  await fs.mkdir(path.join(ROOT, 'Series', 'Próximamente'), { recursive: true });
   await fs.writeFile(
-    path.join(ROOT, 'Naturaleza', 'notas.txt'),
+    path.join(ROOT, 'Peliculas', 'notas.txt'),
     'Este archivo no es un vídeo y no debe aparecer en la biblioteca.\n',
+    'utf8',
+  );
+  await fs.writeFile(
+    path.join(ROOT, 'leeme.txt'),
+    'Estructura de prueba: Peliculas/ para películas y Series/ para series.\n',
     'utf8',
   );
 

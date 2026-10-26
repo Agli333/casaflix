@@ -17,3 +17,6 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
+
+# Carpeta plana usada por las pruebas de estructura
+.test-flat/

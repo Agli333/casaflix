@@ -21,19 +21,57 @@ En la primera ejecución, pulsa **Elegir carpeta de vídeos** y selecciona la ca
 
 ### Cómo se organiza la biblioteca
 
-- Se buscan archivos `.mp4`, `.webm` y `.m4v` de forma **recursiva**.
-- Cada **subcarpeta de primer nivel** se convierte en una fila (categoría). Los vídeos de subcarpetas más profundas heredan la categoría de esa primera carpeta.
-- Los vídeos que están directamente en la carpeta raíz aparecen en **Sin categoría**.
-- El título es el nombre del archivo sin la extensión.
-- Si hay un `poster.jpg` o `folder.jpg` junto a los vídeos, se usa como carátula. También se aceptan `poster.png`, `poster.webp`, `folder.png` y `folder.webp`.
+CasaFlix trabaja con dos apartados fijos: **Películas** y **Series**.
+
+- Dentro de la carpeta elegida debe haber dos subcarpetas: `Peliculas` y `Series`. Se aceptan mayúsculas, minúsculas y la variante `Películas` con tilde.
+- Si alguna no existe, CasaFlix la crea vacía y muestra un aviso recordando la estructura. El aviso se puede cerrar.
+- Se buscan archivos `.mp4`, `.webm` y `.m4v`.
+
+**Películas**
+
+- Cada vídeo dentro de `Peliculas` (también en sus subcarpetas) es una película.
+- La cuadrícula muestra la carátula, el título y la duración.
+
+**Series**
+
+- Cada subcarpeta directa de `Series` es una serie. Las subcarpetas vacías no aparecen.
+- La carátula de la serie es `poster.jpg` o `folder.jpg` dentro de su carpeta (también se aceptan `.jpeg`, `.png` y `.webp`). Si no hay, se usa la miniatura del primer episodio.
+- Al pulsar una serie se abre su vista de detalle con las temporadas y los episodios.
+- Las subcarpetas de la serie se tratan como temporadas. Los episodios se ordenan de forma natural: `Episodio 2` antes que `Episodio 10`.
+- Si no hay subcarpetas de temporada, todos los episodios forman **Temporada 1**. Si hay temporadas y además episodios sueltos en la carpeta de la serie, estos aparecen en **Sin temporada**.
+- El título de cada episodio es el nombre del archivo sin la extensión y sin el prefijo de número (`Episodio 2 - La tormenta` se muestra como «La tormenta»).
+
+Ejemplo de estructura:
+
+```text
+Mi carpeta/
+├── Peliculas/
+│   ├── Atardecer en la costa.mp4
+│   └── Atardecer en la costa.jpg
+└── Series/
+    └── La casa del faro/
+        ├── poster.jpg
+        ├── Temporada 1/
+        │   ├── Episodio 1 - La llegada.mp4
+        │   └── Episodio 2 - La tormenta.mp4
+        └── Temporada 2/
+            └── Episodio 1 - Nuevo horizonte.mp4
+```
+
+**Carátulas y duraciones**
+
+- Si un vídeo tiene una imagen con su mismo nombre (por ejemplo `Atardecer en la costa.jpg`) se usa como carátula propia.
 - Si no hay carátula, CasaFlix captura un fotograma del propio vídeo la primera vez que se ve la tarjeta y guarda la miniatura en caché.
+- La duración se lee del archivo de forma perezosa y se guarda en caché para no repetir el proceso.
 
 ### Funciones
 
-- Buscador por título (con o sin tildes).
-- Filas horizontales con desplazamiento lateral y flechas.
+- Pestañas **Películas**, **Series** y **Descubrir**, con buscador, botón de carpeta y actualización.
+- Buscador por título (con o sin tildes); en Series también busca en los títulos de los episodios.
+- Cuadrícula de películas, cuadrícula de series y vista de detalle con temporadas y episodios.
 - Reproductor integrado con controles nativos y botón **Volver**.
-- Guardado automático de la posición de reproducción y fila **Continuar viendo**.
+- Guardado automático de la posición de reproducción y fila **Continuar viendo** en cada apartado: películas en Películas y el último episodio de cada serie en Series.
+- Botón **Siguiente episodio** en el reproductor, que se destaca al terminar un episodio.
 - Pestaña **Descubrir** con enlaces a servicios gratuitos y legales. Los enlaces se abren en el navegador del sistema.
 - Aviso en **Descubrir** cuando no hay conexión. La biblioteca local sigue funcionando sin internet.
 
@@ -70,7 +108,10 @@ Allí se guardan:
 
 - `config.json`: ruta de la carpeta de vídeos elegida.
 - `progress.json`: posición de reproducción de cada vídeo.
+- `durations.json`: duraciones ya leídas de los vídeos.
 - `thumbnails/`: miniaturas generadas automáticamente.
+
+El progreso se asocia a la ruta de cada archivo, no a la categoría, así que se conserva aunque reorganices la biblioteca o cambies el nombre de una serie.
 
 Para una instalación portable o para pruebas se puede indicar otra carpeta de datos con la variable de entorno `CASAFLIX_USER_DATA`:
 
@@ -119,7 +160,7 @@ mi-netflix/
 
 ## Verificación durante el desarrollo
 
-El repositorio incluye una prueba de extremo a extremo que abre la aplicación real, comprueba el escaneo, las carátulas, las miniaturas, el buscador, el reproductor, «Continuar viendo» y la pestaña Descubrir, y guarda capturas en `.test-artifacts/`.
+El repositorio incluye una prueba de extremo a extremo que abre la aplicación real y comprueba la creación de `Peliculas` y `Series`, las cuadrículas de películas y series, las carátulas, las miniaturas, las duraciones, el buscador, la vista de detalle, el orden natural de los episodios, el reproductor, «Continuar viendo» en cada apartado, el botón de siguiente episodio y la pestaña Descubrir. Las capturas se guardan en `.test-artifacts/`.
 
 ```bash
 # 1. Genera vídeos de prueba originales con MediaRecorder

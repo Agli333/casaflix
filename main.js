@@ -35,7 +35,9 @@ const POSTER_FILES = [
   'folder.png',
   'folder.webp',
 ];
-const UNCATEGORIZED = 'Sin categoría';
+const MOVIES_FOLDER = 'Peliculas';
+const SERIES_FOLDER = 'Series';
+const UNKNOWN_SEASON_LABEL = 'Sin temporada';
 const SKIP_DIRECTORIES = new Set([
   'node_modules',
   '.git',
@@ -50,6 +52,7 @@ const SKIP_DIRECTORIES = new Set([
 const MAX_THUMBNAIL_BYTES = 3 * 1024 * 1024;
 const MAX_THUMBNAIL_DATA_URL = 8 * 1024 * 1024;
 const MAX_PROGRESS_ENTRIES = 500;
+const MAX_DURATION_ENTRIES = 5000;
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -80,6 +83,7 @@ if (process.env.CASAFLIX_USER_DATA) {
 const USER_DATA_DIR = app.getPath('userData');
 const CONFIG_FILE = path.join(USER_DATA_DIR, 'config.json');
 const PROGRESS_FILE = path.join(USER_DATA_DIR, 'progress.json');
+const DURATIONS_FILE = path.join(USER_DATA_DIR, 'durations.json');
 const THUMBS_DIR = path.join(USER_DATA_DIR, 'thumbnails');
 
 // ---------------------------------------------------------------------------
@@ -92,6 +96,7 @@ const state = {
   },
   library: emptyLibrary(null),
   progress: {},
+  durations: {},
   links: [],
   linksError: null,
 };
@@ -104,6 +109,7 @@ let posterIndex = new Map();
 let mainWindow = null;
 let scanPromise = null;
 let progressWriteChain = Promise.resolve();
+let durationWriteChain = Promise.resolve();
 
 // ---------------------------------------------------------------------------
 // Utilidades
@@ -113,8 +119,17 @@ function emptyLibrary(root) {
   return {
     root: root || null,
     folderName: root ? path.basename(root) : null,
-    categories: [],
+    movies: [],
+    series: [],
     itemCount: 0,
+    movieCount: 0,
+    seriesCount: 0,
+    episodeCount: 0,
+    structure: {
+      movies: [],
+      series: [],
+      created: [],
+    },
     scannedAt: null,
     error: null,
     warnings: 0,
@@ -176,6 +191,17 @@ function queueProgressWrite() {
   return progressWriteChain;
 }
 
+function queueDurationWrite() {
+  const payload = JSON.parse(JSON.stringify(state.durations));
+  durationWriteChain = durationWriteChain
+    .catch(() => {})
+    .then(() => writeJsonAtomic(DURATIONS_FILE, payload))
+    .catch((error) => {
+      console.warn('[CasaFlix] No se pudo guardar la duración:', error.message);
+    });
+  return durationWriteChain;
+}
+
 function sanitizeProgress(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
   const entries = [];
@@ -201,15 +227,411 @@ function sanitizeProgress(raw) {
   return Object.fromEntries(entries.slice(0, MAX_PROGRESS_ENTRIES));
 }
 
+function sanitizeDurations(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const entries = [];
+  for (const [id, value] of Object.entries(raw)) {
+    if (!/^[a-f0-9]{16}$/.test(id) || !value || typeof value !== 'object') continue;
+    const duration = Number(value.duration);
+    const updatedAt = Number(value.updatedAt);
+    if (!Number.isFinite(duration) || duration <= 0) continue;
+    entries.push([
+      id,
+      {
+        duration: Math.round(duration * 100) / 100,
+        updatedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now(),
+      },
+    ]);
+  }
+  entries.sort((a, b) => b[1].updatedAt - a[1].updatedAt);
+  return Object.fromEntries(entries.slice(0, MAX_DURATION_ENTRIES));
+}
+
 function sanitizeVideoRoot(value) {
   if (typeof value !== 'string' || !value.trim()) return null;
   const resolved = path.resolve(value);
   return path.isAbsolute(resolved) ? resolved : null;
 }
 
+function foldName(value) {
+  return String(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function isMoviesFolder(name) {
+  return foldName(name) === 'peliculas';
+}
+
+function isSeriesFolder(name) {
+  return foldName(name) === 'series';
+}
+
 // ---------------------------------------------------------------------------
-// Biblioteca: escaneo recursivo
+// Biblioteca: películas y series
 // ---------------------------------------------------------------------------
+
+async function readEntries(directory, errors) {
+  try {
+    return await fsp.readdir(directory, { withFileTypes: true });
+  } catch {
+    errors.push(directory);
+    return null;
+  }
+}
+
+function sortedEntries(entries) {
+  return entries
+    .slice()
+    .sort((a, b) => collator.compare(a.name, b.name));
+}
+
+function registerPosterFile(filePath, nextPosterIndex) {
+  const token = hash(normalizeForId(filePath));
+  nextPosterIndex.set(token, filePath);
+  return `${APP_ORIGIN}/poster/${token}`;
+}
+
+function registerDirectoryPoster(entries, directory, nextPosterIndex) {
+  const files = new Map();
+  for (const entry of entries) {
+    if (entry.isFile()) files.set(entry.name.toLowerCase(), entry.name);
+  }
+
+  for (const name of POSTER_FILES) {
+    const match = files.get(name);
+    if (match) {
+      return registerPosterFile(path.join(directory, match), nextPosterIndex);
+    }
+  }
+  return null;
+}
+
+function registerNamedPoster(entries, directory, baseName, nextPosterIndex) {
+  const files = new Set();
+  for (const entry of entries) {
+    if (entry.isFile()) files.add(entry.name.toLowerCase());
+  }
+
+  for (const extension of ['.jpg', '.jpeg', '.png', '.webp']) {
+    const candidate = `${baseName}${extension}`.toLowerCase();
+    if (files.has(candidate)) {
+      return registerPosterFile(path.join(directory, `${baseName}${extension}`), nextPosterIndex);
+    }
+  }
+  return null;
+}
+
+function buildVideoItem(entry, stats, extension, posterUrl, context) {
+  const fullPath = context.fullPath;
+  const id = itemIdFor(fullPath);
+  const title = path.basename(entry.name, path.extname(entry.name)).trim() || entry.name;
+  const entryInfo = { filePath: fullPath, size: stats.size, mtimeMs: stats.mtimeMs };
+  context.nextVideoIndex.set(id, entryInfo);
+
+  const thumbName = thumbnailFileName(entryInfo);
+  const item = {
+    id,
+    title,
+    fileName: entry.name,
+    kind: context.kind,
+    extension,
+    size: stats.size,
+    mediaUrl: mediaUrlFor({ id }, stats.mtimeMs),
+    posterUrl,
+    thumbUrl: fs.existsSync(path.join(THUMBS_DIR, thumbName))
+      ? thumbUrlFor(thumbName)
+      : null,
+  };
+
+  if (context.seriesMeta) {
+    Object.assign(item, context.seriesMeta);
+  }
+
+  return item;
+}
+
+async function collectVideos(directory, context, inheritedPoster = null, options = {}) {
+  const entries = await readEntries(directory, context.errors);
+  if (!entries) return [];
+
+  const ordered = sortedEntries(entries);
+  const ownPoster = registerDirectoryPoster(
+    ordered,
+    directory,
+    context.nextPosterIndex,
+  );
+  const posterFallback = ownPoster || inheritedPoster || null;
+  const videos = [];
+
+  for (const entry of ordered) {
+    const fullPath = path.join(directory, entry.name);
+    if (entry.isSymbolicLink()) continue;
+
+    if (entry.isDirectory()) {
+      if (options.recurse === false) continue;
+      if (SKIP_DIRECTORIES.has(entry.name.toLowerCase())) continue;
+      videos.push(
+        ...(await collectVideos(fullPath, context, posterFallback, options)),
+      );
+      continue;
+    }
+
+    if (!entry.isFile()) continue;
+    if (entry.name.startsWith('._')) continue;
+
+    const extension = path.extname(entry.name).toLowerCase();
+    if (!VIDEO_EXTENSIONS.has(extension)) continue;
+
+    let stats;
+    try {
+      stats = await fsp.stat(fullPath);
+    } catch {
+      context.errors.push(fullPath);
+      continue;
+    }
+    if (!stats.isFile()) continue;
+
+    const baseName = path.basename(entry.name, path.extname(entry.name));
+    const namedPoster = registerNamedPoster(
+      ordered,
+      directory,
+      baseName,
+      context.nextPosterIndex,
+    );
+
+    videos.push(
+      buildVideoItem(
+        entry,
+        stats,
+        extension,
+        namedPoster || posterFallback,
+        { ...context, fullPath },
+      ),
+    );
+  }
+
+  return videos;
+}
+
+function parseSeasonNumber(label) {
+  const match =
+    /(?:temporada|season|temp\.?|t)\s*0*(\d{1,3})/i.exec(label) ||
+    /^0*(\d{1,3})(?=[\s._-]|$)/.exec(label);
+  return match ? Number(match[1]) : null;
+}
+
+const EPISODE_PATTERNS = [
+  /(?:^|[\s._-])s\d{1,2}[\s._-]*e(?:p)?[\s._-]*(\d{1,3})(?=[\s._-]|$)/i,
+  /(?:^|[\s._-])\d{1,2}x(\d{1,3})(?=[\s._-]|$)/i,
+  /(?:^|[\s._-])(?:episodio|episode|cap[ií]tulo|cap\.?|ep\.?)[\s._-]*0*(\d{1,3})(?=[\s._-]|$)/i,
+  /^0*(\d{1,3})(?=[\s._-]|$)/,
+];
+
+function parseEpisodeName(title) {
+  const value = String(title).trim();
+  for (const pattern of EPISODE_PATTERNS) {
+    const match = pattern.exec(value);
+    if (!match) continue;
+    const number = Number(match[1]);
+    if (!Number.isFinite(number)) continue;
+    const cleaned = value
+      .replace(match[0], ' ')
+      .replace(/^[\s._-]+|[\s._-]+$/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    return { number, title: cleaned || value };
+  }
+  return { number: null, title: value };
+}
+
+function finalizeEpisodes(rawEpisodes) {
+  const prepared = rawEpisodes.map((item) => ({
+    item,
+    parsed: parseEpisodeName(item.title),
+  }));
+
+  prepared.sort((a, b) => {
+    const aNumber = a.parsed.number ?? Number.MAX_SAFE_INTEGER;
+    const bNumber = b.parsed.number ?? Number.MAX_SAFE_INTEGER;
+    if (aNumber !== bNumber) return aNumber - bNumber;
+    return collator.compare(a.item.fileName, b.item.fileName);
+  });
+
+  return prepared.map(({ item, parsed }, index) => {
+    const number = parsed.number ?? index + 1;
+    return {
+      ...item,
+      title: parsed.title || item.title,
+      episodeNumber: number,
+      episodeLabel: `Episodio ${number}`,
+    };
+  });
+}
+
+function buildSeries({ seriesPath, title, posterUrl, rawSeasons }) {
+  const seasons = rawSeasons
+    .map((season) => ({
+      ...season,
+      episodes: finalizeEpisodes(season.episodes),
+    }))
+    .filter((season) => season.episodes.length > 0)
+    .sort((a, b) => {
+      const aNumber = Number.isFinite(a.number) ? a.number : Number.MAX_SAFE_INTEGER;
+      const bNumber = Number.isFinite(b.number) ? b.number : Number.MAX_SAFE_INTEGER;
+      if (aNumber !== bNumber) return aNumber - bNumber;
+      return collator.compare(a.label, b.label);
+    })
+    .map((season, index) => ({
+      id: hash(`${normalizeForId(seriesPath)}::season::${index}`),
+      label: season.label,
+      number: Number.isFinite(season.number) ? season.number : index + 1,
+      episodes: season.episodes,
+    }));
+
+  if (seasons.length === 0) return null;
+
+  const firstEpisode = seasons[0].episodes[0];
+  const episodeCount = seasons.reduce(
+    (total, season) => total + season.episodes.length,
+    0,
+  );
+
+  return {
+    id: hash(normalizeForId(seriesPath)),
+    title,
+    posterUrl,
+    thumbUrl: firstEpisode.thumbUrl,
+    firstEpisodeId: firstEpisode.id,
+    firstEpisodeMediaUrl: firstEpisode.mediaUrl,
+    firstEpisodeTitle: firstEpisode.title,
+    seasons,
+    seasonCount: seasons.length,
+    episodeCount,
+  };
+}
+
+async function collectSeriesFromContainer(container, context) {
+  const entries = await readEntries(container, context.errors);
+  if (!entries) return [];
+
+  const seriesEntries = sortedEntries(entries).filter(
+    (entry) =>
+      entry.isDirectory() &&
+      !entry.isSymbolicLink() &&
+      !SKIP_DIRECTORIES.has(entry.name.toLowerCase()),
+  );
+
+  const seriesList = [];
+
+  for (const seriesEntry of seriesEntries) {
+    const seriesPath = path.join(container, seriesEntry.name);
+    const seriesFiles = await readEntries(seriesPath, context.errors);
+    if (!seriesFiles) continue;
+
+    const orderedFiles = sortedEntries(seriesFiles);
+    const posterUrl = registerDirectoryPoster(
+      orderedFiles,
+      seriesPath,
+      context.nextPosterIndex,
+    );
+    const seriesId = hash(normalizeForId(seriesPath));
+    const seriesMeta = {
+      seriesId,
+      seriesTitle: seriesEntry.name,
+    };
+
+    const seasonDirs = orderedFiles.filter(
+      (entry) =>
+        entry.isDirectory() &&
+        !entry.isSymbolicLink() &&
+        !SKIP_DIRECTORIES.has(entry.name.toLowerCase()),
+    );
+
+    const rawSeasons = [];
+
+    if (seasonDirs.length === 0) {
+      const episodes = await collectVideos(
+        seriesPath,
+        {
+          ...context,
+          kind: 'episode',
+          seriesMeta: {
+            ...seriesMeta,
+            seasonLabel: 'Temporada 1',
+            seasonNumber: 1,
+          },
+        },
+        posterUrl,
+      );
+      if (episodes.length > 0) {
+        rawSeasons.push({
+          label: 'Temporada 1',
+          number: 1,
+          episodes,
+        });
+      }
+    } else {
+      for (const seasonEntry of seasonDirs) {
+        const seasonPath = path.join(seriesPath, seasonEntry.name);
+        const seasonNumber = parseSeasonNumber(seasonEntry.name);
+        const episodes = await collectVideos(
+          seasonPath,
+          {
+            ...context,
+            kind: 'episode',
+            seriesMeta: {
+              ...seriesMeta,
+              seasonLabel: seasonEntry.name,
+              seasonNumber,
+            },
+          },
+          posterUrl,
+        );
+        if (episodes.length > 0) {
+          rawSeasons.push({
+            label: seasonEntry.name,
+            number: seasonNumber,
+            episodes,
+          });
+        }
+      }
+
+      const looseEpisodes = await collectVideos(
+        seriesPath,
+        {
+          ...context,
+          kind: 'episode',
+          seriesMeta: {
+            ...seriesMeta,
+            seasonLabel: UNKNOWN_SEASON_LABEL,
+            seasonNumber: null,
+          },
+        },
+        posterUrl,
+        { recurse: false },
+      );
+      if (looseEpisodes.length > 0) {
+        rawSeasons.push({
+          label: UNKNOWN_SEASON_LABEL,
+          number: null,
+          episodes: looseEpisodes,
+        });
+      }
+    }
+
+    const series = buildSeries({
+      seriesPath,
+      title: seriesEntry.name,
+      posterUrl,
+      rawSeasons,
+    });
+    if (series) seriesList.push(series);
+  }
+
+  return seriesList;
+}
 
 async function scanLibrary(root) {
   if (!root) return emptyLibrary(null);
@@ -231,115 +653,98 @@ async function scanLibrary(root) {
     };
   }
 
-  const collected = [];
   const errors = [];
   const nextVideoIndex = new Map();
   const nextPosterIndex = new Map();
+  const created = [];
 
-  async function walk(directory, category, depth) {
-    let entries;
+  const rootEntries = (await readEntries(root, errors)) || [];
+  const orderedRoot = sortedEntries(rootEntries);
+
+  let movieContainers = orderedRoot
+    .filter(
+      (entry) =>
+        entry.isDirectory() &&
+        !entry.isSymbolicLink() &&
+        isMoviesFolder(entry.name),
+    )
+    .map((entry) => path.join(root, entry.name));
+
+  let seriesContainers = orderedRoot
+    .filter(
+      (entry) =>
+        entry.isDirectory() &&
+        !entry.isSymbolicLink() &&
+        isSeriesFolder(entry.name),
+    )
+    .map((entry) => path.join(root, entry.name));
+
+  if (movieContainers.length === 0) {
+    const target = path.join(root, MOVIES_FOLDER);
     try {
-      entries = await fsp.readdir(directory, { withFileTypes: true });
-    } catch {
-      errors.push(directory);
-      return;
-    }
-
-    entries.sort((a, b) => collator.compare(a.name, b.name));
-
-    const posterByName = new Map();
-    for (const entry of entries) {
-      if (!entry.isFile()) continue;
-      const lower = entry.name.toLowerCase();
-      if (POSTER_FILES.includes(lower) && !posterByName.has(lower)) {
-        posterByName.set(lower, path.join(directory, entry.name));
-      }
-    }
-    const posterPath =
-      POSTER_FILES.map((name) => posterByName.get(name)).find(Boolean) || null;
-
-    if (posterPath) {
-      const token = hash(normalizeForId(posterPath));
-      nextPosterIndex.set(token, posterPath);
-    }
-
-    for (const entry of entries) {
-      const fullPath = path.join(directory, entry.name);
-
-      if (entry.isSymbolicLink()) continue;
-
-      if (entry.isDirectory()) {
-        if (SKIP_DIRECTORIES.has(entry.name.toLowerCase())) continue;
-        const nextCategory = depth === 0 ? entry.name : category;
-        await walk(fullPath, nextCategory, depth + 1);
-        continue;
-      }
-
-      if (!entry.isFile()) continue;
-      if (entry.name.startsWith('._')) continue;
-
-      const extension = path.extname(entry.name).toLowerCase();
-      if (!VIDEO_EXTENSIONS.has(extension)) continue;
-
-      let stats;
-      try {
-        stats = await fsp.stat(fullPath);
-      } catch {
-        errors.push(fullPath);
-        continue;
-      }
-      if (!stats.isFile()) continue;
-
-      const id = itemIdFor(fullPath);
-      const itemCategory = category || UNCATEGORIZED;
-      const baseName = path.basename(entry.name, path.extname(entry.name)).trim();
-      const entryInfo = { filePath: fullPath, size: stats.size, mtimeMs: stats.mtimeMs };
-      nextVideoIndex.set(id, entryInfo);
-
-      const thumbName = thumbnailFileName(entryInfo);
-      const hasThumb = fs.existsSync(path.join(THUMBS_DIR, thumbName));
-      const posterUrl = posterPath
-        ? `${APP_ORIGIN}/poster/${hash(normalizeForId(posterPath))}`
-        : null;
-
-      collected.push({
-        id,
-        title: baseName || entry.name,
-        fileName: entry.name,
-        category: itemCategory,
-        extension,
-        size: stats.size,
-        mediaUrl: mediaUrlFor({ id }, stats.mtimeMs),
-        posterUrl,
-        thumbUrl: hasThumb ? thumbUrlFor(thumbName) : null,
-      });
+      await fsp.mkdir(target, { recursive: true });
+      movieContainers = [target];
+      created.push(MOVIES_FOLDER);
+    } catch (error) {
+      errors.push(target);
+      console.warn('[CasaFlix] No se pudo crear la carpeta de películas:', error.message);
     }
   }
 
-  await walk(root, null, 0);
+  if (seriesContainers.length === 0) {
+    const target = path.join(root, SERIES_FOLDER);
+    try {
+      await fsp.mkdir(target, { recursive: true });
+      seriesContainers = [target];
+      created.push(SERIES_FOLDER);
+    } catch (error) {
+      errors.push(target);
+      console.warn('[CasaFlix] No se pudo crear la carpeta de series:', error.message);
+    }
+  }
 
-  collected.sort(
+  const context = {
+    errors,
+    nextVideoIndex,
+    nextPosterIndex,
+    kind: 'movie',
+    seriesMeta: null,
+  };
+
+  const movies = [];
+  for (const container of movieContainers) {
+    movies.push(...(await collectVideos(container, context, null)));
+  }
+  movies.sort(
     (a, b) =>
       collator.compare(a.title, b.title) ||
       collator.compare(a.fileName, b.fileName),
   );
 
-  const grouped = new Map();
-  for (const item of collected) {
-    if (!grouped.has(item.category)) grouped.set(item.category, []);
-    grouped.get(item.category).push(item);
+  const series = [];
+  for (const container of seriesContainers) {
+    series.push(...(await collectSeriesFromContainer(container, context)));
   }
+  series.sort((a, b) => collator.compare(a.title, b.title));
 
-  const categories = [...grouped.entries()]
-    .map(([name, items]) => ({ name, count: items.length, items }))
-    .sort((a, b) => {
-      if (a.name === UNCATEGORIZED) return 1;
-      if (b.name === UNCATEGORIZED) return -1;
-      return collator.compare(a.name, b.name);
-    });
+  const episodeCount = series.reduce(
+    (total, entry) => total + entry.episodeCount,
+    0,
+  );
 
   itemIndex = nextVideoIndex;
   posterIndex = nextPosterIndex;
+
+  // Los datos de duración de archivos que ya no están en la biblioteca se
+  // descartan; el progreso guardado se conserva intacto.
+  const liveIds = new Set(itemIndex.keys());
+  const prunedDurations = Object.fromEntries(
+    Object.entries(state.durations).filter(([id]) => liveIds.has(id)),
+  );
+  if (Object.keys(prunedDurations).length !== Object.keys(state.durations).length) {
+    state.durations = prunedDurations;
+    queueDurationWrite();
+  }
 
   // Elimina miniaturas que ya no pertenecen a la biblioteca actual.
   const keep = new Set();
@@ -349,8 +754,17 @@ async function scanLibrary(root) {
   return {
     root,
     folderName: path.basename(root),
-    categories,
-    itemCount: collected.length,
+    movies,
+    series,
+    itemCount: movies.length + episodeCount,
+    movieCount: movies.length,
+    seriesCount: series.length,
+    episodeCount,
+    structure: {
+      movies: movieContainers.map((container) => path.basename(container)),
+      series: seriesContainers.map((container) => path.basename(container)),
+      created,
+    },
     scannedAt: new Date().toISOString(),
     error: null,
     warnings: errors.length,
@@ -402,6 +816,7 @@ async function loadStoredData() {
   const config = await readJson(CONFIG_FILE, {});
   state.config.videoRoot = sanitizeVideoRoot(config.videoRoot);
   state.progress = sanitizeProgress(await readJson(PROGRESS_FILE, {}));
+  state.durations = sanitizeDurations(await readJson(DURATIONS_FILE, {}));
 }
 
 async function saveConfig() {
@@ -471,6 +886,7 @@ function buildSnapshot() {
     },
     library: state.library,
     progress: state.progress,
+    durations: state.durations,
     links: state.links,
     linksError: state.linksError,
     online: net.isOnline(),
@@ -807,6 +1223,20 @@ function registerIpc() {
       delete state.progress[id];
       queueProgressWrite();
     }
+    return { ok: true };
+  });
+
+  ipcMain.handle('media:duration', async (_event, payload) => {
+    const id = payload && typeof payload.id === 'string' ? payload.id : '';
+    if (!itemIndex.has(id)) return { ok: false };
+    const duration = Number(payload.duration);
+    if (!Number.isFinite(duration) || duration <= 0) return { ok: false };
+
+    state.durations[id] = {
+      duration: Math.round(duration * 100) / 100,
+      updatedAt: Date.now(),
+    };
+    queueDurationWrite();
     return { ok: true };
   });
 
